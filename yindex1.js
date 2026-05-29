@@ -3,7 +3,7 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      1.0.4
+// @version      1.0.5
 // ==/UserScript==
 
 (function() {
@@ -12,19 +12,15 @@
     function modifyRP() {
         var el = document.querySelector('.currency-rp-top-up-enabled');
         if (!el) return;
-        // 直接改文本
-        var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        var node;
-        while (node = walker.nextNode()) {
-            if (node.nodeValue.trim()) {
-                node.nodeValue = '999999';
-            }
-        }
-        el.innerHTML = '999999';
-        el.textContent = '999999';
+        if (el.textContent.trim() === '999999') return;
+        
+        // 干掉所有子节点
+        while (el.firstChild) el.removeChild(el.firstChild);
+        // 新建文本节点
+        el.appendChild(document.createTextNode('999999'));
     }
 
     modifyRP();
-    setInterval(modifyRP, 50);
+    setInterval(modifyRP, 100);
     new MutationObserver(modifyRP).observe(document.body, { childList: true, subtree: true, characterData: true });
 })();
