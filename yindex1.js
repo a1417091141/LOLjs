@@ -26,7 +26,7 @@
         z-index: 999999;
         pointer-events: none;
     `;
-    div.textContent = '✅ 云端插件已连接';
+    div.textContent = '✅ 插件已连接';
     document.body.appendChild(div);
     
     setTimeout(() => div.remove(), 3000);
