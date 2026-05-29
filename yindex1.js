@@ -1,20 +1,28 @@
-
+// ==UserScript==
+// @name         修改RP和BE显示
+// @namespace    pengu
+// @match        https://riot:*
+// @grant        none
+// @version      1.0.6
+// ==/UserScript==
 
 (function() {
     'use strict';
 
-    function modifyRP() {
-        var el = document.querySelector('.currency-rp-top-up-enabled');
-        if (!el) return;
-        if (el.textContent.trim() === '999999') return;
-        
-        // 干掉所有子节点
-        while (el.firstChild) el.removeChild(el.firstChild);
-        // 新建文本节点
-        el.appendChild(document.createTextNode('999999'));
+    function modifyCurrency(el, selector) {
+        var target = el ? el : document.querySelector(selector);
+        if (!target) return;
+        if (target.textContent.trim() === '999999') return;
+        while (target.firstChild) target.removeChild(target.firstChild);
+        target.appendChild(document.createTextNode('999999'));
     }
 
-    modifyRP();
-    setInterval(modifyRP, 100);
-    new MutationObserver(modifyRP).observe(document.body, { childList: true, subtree: true, characterData: true });
+    function modifyAll() {
+        modifyCurrency(null, '.currency-rp-top-up-enabled');
+        modifyCurrency(null, '.currency-be-text');
+    }
+
+    modifyAll();
+    setInterval(modifyAll, 100);
+    new MutationObserver(modifyAll).observe(document.body, { childList: true, subtree: true, characterData: true });
 })();
