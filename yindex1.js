@@ -1,4 +1,3 @@
-
 // ==UserScript==
 // @name         测试插件
 // @namespace    pengu
