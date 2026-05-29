@@ -1,0 +1,14 @@
+{
+  "plugins": [
+    "yindex1.js",
+    "yindex2.js",
+     "yindex3.js",
+      "yindex4.js",
+       "yindex5.js",
+        "yindex6.js",
+         "yindex7.js",
+          "yindex8.js",
+           "yindex9.js",
+            "yindex10.js",
+  ]
+}
