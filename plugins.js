@@ -7,7 +7,7 @@
 // ==/UserScript==
 
 (async function() {
-    const BASE = 'https://cdn.jsdelivr.net/gh/a1417091141/LOLjs@latest';
+    const BASE = 'https://cdn.jsdelivr.net/gh/a1417091141/LOLjs@main';
     const cacheKey = 'dynamic_plugins_loaded';
     
     if (sessionStorage.getItem(cacheKey)) return;
