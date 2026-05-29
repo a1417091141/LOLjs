@@ -7,10 +7,9 @@
 // ==/UserScript==
 
 (async function() {
-    const BASE = 'https://cdn.jsdelivr.net/gh/用户名/仓库名@1.0.0';
+    const BASE = 'https://cdn.jsdelivr.net/gh/a1417091141/LOLjs@95f311b';
     const cacheKey = 'dynamic_plugins_loaded';
     
-    // 只加载一次
     if (sessionStorage.getItem(cacheKey)) return;
     sessionStorage.setItem(cacheKey, '1');
 
@@ -21,7 +20,6 @@
         for (const file of list) {
             try {
                 const code = await fetch(`${BASE}/${file}`).then(r => r.text());
-                // 去掉 UserScript 头部，直接执行
                 const clean = code.replace(/\/\/ ==UserScript==[\s\S]*?==\/UserScript==/, '');
                 new Function(clean)();
                 console.log('[加载器] ✅', file);
