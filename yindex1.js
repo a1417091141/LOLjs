@@ -1,10 +1,4 @@
-// ==UserScript==
-// @name         修改RP显示
-// @namespace    pengu
-// @match        https://riot:*
-// @grant        none
-// @version      1.0.5
-// ==/UserScript==
+
 
 (function() {
     'use strict';
