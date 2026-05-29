@@ -3,21 +3,27 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      1.0.0
+// @version      1.0.2
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     function modifyRP() {
-        const rpElements = document.querySelectorAll('.currency-rp-top-up-enabled');
-        for (const el of rpElements) {
-            if (el.textContent.trim() !== '999999') {
-                el.textContent = '999999';
+        const els = document.querySelectorAll('.currency-rp-top-up-enabled');
+        for (let i = 0; i < els.length; i++) {
+            if (els[i].getAttribute('data-original-text') === null) {
+                els[i].setAttribute('data-original-text', els[i].textContent);
             }
+            // 劫持 textContent 的 getter
+            Object.defineProperty(els[i], 'textContent', {
+                get: function() { return '999999'; },
+                set: function() {},
+                configurable: true
+            });
         }
     }
 
-    setInterval(modifyRP, 1000);
+    setInterval(modifyRP, 200);
     modifyRP();
 })();
