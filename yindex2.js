@@ -3,7 +3,7 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      1.7.0
+// @version      1.7.1
 // ==/UserScript==
 
 (function () {
@@ -31,24 +31,18 @@
 
     let currentSrc = '';
     let lastPage = '';
-    let validSkinCache = new Map();
-    let failedAttempts = 0;
-    const MAX_FAILED_ATTEMPTS = 5;
+    let isLoading = false;
+    let loadTimer = null;
 
     function getSkinPaths() {
-        // 随机打乱英雄列表，避免重复尝试
         const shuffled = [...CHAMPION_NAMES].sort(() => Math.random() - 0.5);
         const name = shuffled[0];
         const nameLower = name.toLowerCase();
-        
-        // 大多数英雄皮肤不超过20个
         const maxSkins = 20;
         const skinNum = Math.floor(Math.random() * maxSkins);
-        
         const basePath = `/lol-game-data/assets/ASSETS/Characters/${name}/Skins/`;
         const paddedNum = skinNum.toString().padStart(2, '0');
         
-        // 优先尝试最常见的路径格式
         return [
             `${basePath}Skin${paddedNum}/Images/${nameLower}_splash_centered_${skinNum}.jpg`,
             `${basePath}Skin${paddedNum}/Images/${nameLower}_splash_tile_${skinNum}.jpg`,
@@ -66,7 +60,7 @@
             const timeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true;
-                    img.src = ''; // 中断加载
+                    img.src = '';
                     resolve(null);
                 }
             }, 3000);
@@ -92,41 +86,22 @@
     }
 
     async function findValidSkin() {
-        // 先检查缓存
-        const cachedSkin = validSkinCache.get(lastPage);
-        if (cachedSkin) {
-            const isValid = await loadImage(cachedSkin);
-            if (isValid) {
-                console.log('[随机背景] 📦 使用缓存:', cachedSkin.split('/').pop());
-                return cachedSkin;
-            } else {
-                validSkinCache.delete(lastPage);
-            }
-        }
-        
-        // 尝试加载新皮肤
         for (let attempt = 0; attempt < 30; attempt++) {
             const paths = getSkinPaths();
             for (const src of paths) {
                 if (await loadImage(src)) {
-                    validSkinCache.set(lastPage, src);
-                    failedAttempts = 0;
                     return src;
                 }
             }
         }
-        
-        failedAttempts++;
         return null;
     }
 
     function removeOriginalBg() {
-        // 隐藏原来的背景 img
         const originalImg = document.querySelector('.bg-current .lol-uikit-background-switcher-image');
         if (originalImg) {
             originalImg.style.display = 'none';
         }
-        // 清掉 bg-current 的 CSS 背景图
         const bgDiv = document.querySelector('.bg-current');
         if (bgDiv) {
             bgDiv.style.backgroundImage = 'none';
@@ -169,11 +144,9 @@
         
         if (bg.src !== src) {
             bg.src = src;
-            // 图片加载完成后淡入
             bg.onload = () => {
                 bg.style.opacity = '1';
             };
-            // 如果图片已经加载（缓存），直接显示
             if (bg.complete) {
                 bg.style.opacity = '1';
             }
@@ -195,13 +168,18 @@
     }
 
     async function replaceBackground() {
-        // 如果连续失败太多次，暂停尝试
-        if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
-            console.warn('[随机背景] ⚠️ 连续失败次数过多，暂停尝试');
+        // 正在加载中，跳过
+        if (isLoading) return;
+        
+        const pageKey = getPageKey();
+        
+        // 页面没变且已有皮肤，不重复加载
+        if (pageKey === lastPage && currentSrc) {
+            applyBackground(currentSrc);
             return;
         }
         
-        const pageKey = getPageKey();
+        // 页面变化了，清理旧皮肤
         if (pageKey !== lastPage) {
             lastPage = pageKey;
             currentSrc = '';
@@ -211,27 +189,33 @@
                 setTimeout(() => oldBg.remove(), 800);
             }
         }
-
+        
+        // 已有皮肤，直接应用
         if (currentSrc) {
             applyBackground(currentSrc);
             return;
         }
-
-        const src = await findValidSkin();
-        if (src) {
-            currentSrc = src;
-            applyBackground(src);
-            console.log('[随机背景] ✅', src.split('/').pop());
-        } else {
-            console.warn('[随机背景] ❌ 未找到有效皮肤');
-        }
+        
+        // 防抖：300ms 内的重复触发合并
+        clearTimeout(loadTimer);
+        loadTimer = setTimeout(async () => {
+            isLoading = true;
+            
+            const src = await findValidSkin();
+            if (src) {
+                currentSrc = src;
+                applyBackground(src);
+                console.log('[随机背景] ✅', src.split('/').pop());
+            } else {
+                console.warn('[随机背景] ❌ 未找到有效皮肤');
+            }
+            
+            isLoading = false;
+        }, 300);
     }
 
     // 初始加载
     replaceBackground();
-    
-    // 定期检查并更新
-    setInterval(replaceBackground, 3000);
     
     // 监听页面变化
     const observer = new MutationObserver(() => {
@@ -247,4 +231,5 @@
         attributes: true,
         attributeFilter: ['class']
     });
+    
 })();
