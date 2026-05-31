@@ -3,7 +3,7 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      3.3.3
+// @version      3.3.2
 // ==/UserScript==
 
 (function () {
@@ -133,6 +133,7 @@
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+        // 网格背景
         ctx.strokeStyle = 'rgba(255,255,255,0.02)';
         ctx.lineWidth = 0.5;
         for (let x = 0; x < canvas.width; x += GRID) {
@@ -142,8 +143,10 @@
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
         }
 
+        // 粒子
         drawParticles();
 
+        // 蛇身
         for (let i = snake.length - 1; i >= 0; i--) {
             const s = snake[i];
             const t = i / snake.length;
@@ -152,22 +155,26 @@
             const offset = (GRID - size) / 2;
             const h = 140 + t * 40;
 
+            // 身体
             ctx.fillStyle = `hsla(${h}, 70%, 50%, ${alpha})`;
             ctx.beginPath();
             ctx.roundRect(s.x * GRID + offset, s.y * GRID + offset, size, size, 4);
             ctx.fill();
 
+            // 高光
             ctx.fillStyle = `rgba(255,255,255,${alpha * 0.2})`;
             ctx.beginPath();
             ctx.roundRect(s.x * GRID + offset + 2, s.y * GRID + offset + 2, size * 0.6, size * 0.3, 3);
             ctx.fill();
 
+            // 蛇头
             if (i === 0) {
                 ctx.fillStyle = `hsla(${h}, 80%, 60%, 1)`;
                 ctx.beginPath();
                 ctx.roundRect(s.x * GRID + 1, s.y * GRID + 1, GRID - 2, GRID - 2, 6);
                 ctx.fill();
 
+                // 眼睛
                 const eyeSize = 5;
                 const eyeOffset = 4;
                 let ex1, ey1, ex2, ey2;
@@ -209,11 +216,13 @@
             }
         }
 
+        // 食物
         const fx = food.x * GRID + GRID/2;
         const fy = food.y * GRID + GRID/2;
         const pulse = 1 + Math.sin(food.pulse) * 0.2;
         const foodSize = GRID/2 * pulse;
 
+        // 光晕
         const glow = ctx.createRadialGradient(fx, fy, foodSize * 0.5, fx, fy, foodSize * 2);
         glow.addColorStop(0, 'rgba(255, 80, 80, 0.5)');
         glow.addColorStop(1, 'rgba(255, 80, 80, 0)');
@@ -222,6 +231,7 @@
         ctx.arc(fx, fy, foodSize * 2, 0, Math.PI * 2);
         ctx.fill();
 
+        // 果实
         ctx.fillStyle = '#f44';
         ctx.beginPath();
         ctx.arc(fx, fy, foodSize, 0, Math.PI * 2);
@@ -231,6 +241,7 @@
         ctx.arc(fx - foodSize * 0.2, fy - foodSize * 0.2, foodSize * 0.4, 0, Math.PI * 2);
         ctx.fill();
 
+        // UI
         ctx.fillStyle = 'rgba(0,0,0,0.3)';
         ctx.beginPath();
         ctx.roundRect(12, 10, 180, 36, 8);
@@ -242,6 +253,7 @@
         ctx.fillStyle = 'rgba(255,255,255,0.6)';
         ctx.fillText('🏆 ' + highScore, 100, 32);
 
+        // 控制提示
         if (snake.length <= 5) {
             ctx.fillStyle = 'rgba(255,255,255,0.3)';
             ctx.font = '12px Arial';
@@ -294,15 +306,14 @@
     }
 
     function updateBtnStyle() {
-        if (!toggleBtn || !document.body.contains(toggleBtn)) return;
+        if (!toggleBtn) return;
         toggleBtn.style.filter = enabled ? 'grayscale(0)' : 'grayscale(1)';
         toggleBtn.style.opacity = enabled ? '1' : '0.5';
         toggleBtn.title = '贪吃蛇: ' + (enabled ? '开' : '关');
     }
 
     function createButton() {
-        if (toggleBtn && document.body.contains(toggleBtn)) return;
-        toggleBtn = null;
+        if (toggleBtn) return;
         const container = document.querySelector('.custom-game-invite-button-container');
         if (!container) return;
         toggleBtn = document.createElement('button');
@@ -318,12 +329,7 @@
         container.insertBefore(toggleBtn, container.firstChild);
     }
 
-    setInterval(() => {
-        if (!toggleBtn || !document.body.contains(toggleBtn)) {
-            toggleBtn = null;
-            createButton();
-        }
-    }, 500);
+    setInterval(() => { if (!toggleBtn) createButton(); }, 500);
 
     const observer = new MutationObserver(() => {
         if (gameActive && isInChampSelect()) exitGame();
