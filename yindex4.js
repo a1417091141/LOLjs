@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄
-// @version      4.1.0
+// @description  在选人界面显示对方英雄，并带有透视悬浮图标
+// @version      4.3.0
 // ==/PenguLoader==
 
 (function () {
@@ -13,11 +13,14 @@
     let myPuuid = null;
     let partyId = null;
     let lastOpponentSig = '';
-    let lastUploadSig = ''; // 记录上次上传的己方数据指纹
+    let lastUploadSig = '';
     let pollTimer = null;
     let champMap = {};
     let champMapLoaded = false;
     const injectedNodes = new Set();
+    
+    // 悬浮图标元素
+    let floatingIcon = null;
 
     async function lcuGet(path) {
         try {
@@ -67,10 +70,7 @@
             championPickIntent: p.championPickIntent || 0,
         }));
 
-        // 生成当前己方数据的指纹
         const currentSig = JSON.stringify(players);
-        
-        // 如果指纹没变，说明己方没人换英雄，直接跳过上传，节省服务器资源
         if (currentSig === lastUploadSig) return;
         lastUploadSig = currentSig;
 
@@ -81,11 +81,7 @@
         formData.append('players', JSON.stringify(players));
 
         try {
-            await fetch(SERVER_BASE, {
-                method: 'POST',
-                body: formData
-            });
-            console.log('[OpponentDisplay] 己方数据已更新并上传');
+            await fetch(SERVER_BASE, { method: 'POST', body: formData });
         } catch (e) {}
     }
 
@@ -98,18 +94,76 @@
         formData.append('selfPuuid', myPuuid);
 
         try {
-            const res = await fetch(SERVER_BASE, {
-                method: 'POST',
-                body: formData
-            });
+            const res = await fetch(SERVER_BASE, { method: 'POST', body: formData });
             if (res.status === 204) return null;
             if (!res.ok) return null;
             return await res.json();
-        } catch (e) {
-            return null;
+        } catch (e) { return null; }
+    }
+
+    // ============ 图标管理 ============
+    function createFloatingIcon() {
+        if (document.getElementById('opp-display-icon')) return;
+
+        floatingIcon = document.createElement('div');
+        floatingIcon.id = 'opp-display-icon';
+        
+        // 使用 SVG 绘制一个“眼睛/透视”图标
+        floatingIcon.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 24px; height: 24px; transition: all 0.3s ease;">
+                <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" fill="currentColor"/>
+            </svg>
+        `;
+        
+        // 默认状态（灰色、半透明）
+        floatingIcon.style.cssText = `
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #555;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #888;
+            z-index: 999999;
+            pointer-events: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: all 0.3s ease;
+        `;
+        
+        document.body.appendChild(floatingIcon);
+    }
+
+    function updateIconStatus(hasData) {
+        if (!floatingIcon) return;
+        const svg = floatingIcon.querySelector('svg');
+        if (hasData) {
+            // 有数据时：金黄色，带发光效果
+            floatingIcon.style.borderColor = '#c8aa6e';
+            floatingIcon.style.color = '#c8aa6e';
+            floatingIcon.style.boxShadow = '0 0 15px rgba(200, 170, 110, 0.8)';
+            svg.style.transform = 'scale(1.1)';
+        } else {
+            // 无数据时：灰色，平淡
+            floatingIcon.style.borderColor = '#555';
+            floatingIcon.style.color = '#888';
+            floatingIcon.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
+            svg.style.transform = 'scale(1)';
         }
     }
 
+    function removeFloatingIcon() {
+        if (floatingIcon && floatingIcon.parentNode) {
+            floatingIcon.parentNode.removeChild(floatingIcon);
+            floatingIcon = null;
+        }
+    }
+
+    // ============ 界面清理 ============
     function clearInjected() {
         for (const rec of injectedNodes) {
             if (!rec.el) continue;
@@ -157,7 +211,7 @@
     function renderOpponent(opponent) {
         if (!opponent || !opponent.players) return;
         const sig = JSON.stringify(opponent);
-        if (sig === lastOpponentSig) return; // 对方没换人，不更新界面
+        if (sig === lastOpponentSig) return;
         lastOpponentSig = sig;
 
         clearInjected();
@@ -179,6 +233,8 @@
             if (obj) applyChampionToObject(obj, cid, !!p.championId);
         });
         
+        // 拉到数据了，图标亮起！
+        updateIconStatus(true);
         console.log('[OpponentDisplay] 对方数据已同步刷新');
     }
 
@@ -190,30 +246,36 @@
         }
 
         if (phase === 'ChampSelect') {
+            // 进入选人界面，确保图标存在
+            if (!floatingIcon) createFloatingIcon();
+
             const session = await lcuGet('/lol-champ-select/v1/session');
             if (session && session.myTeam) {
                 if (!myPuuid) await fetchMyPuuid();
                 if (!champMapLoaded) await loadChampionMap();
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
-                // 1. 上传己方数据（只有变了才上传）
                 if (partyId && myPuuid) {
                     await uploadMyTeam(session);
                 }
 
-                // 2. 拉取对方数据
                 const opponent = await fetchOpponent();
                 if (opponent && opponent.players) {
                     renderOpponent(opponent);
+                } else {
+                    // 如果没拉取到对方数据，图标变灰
+                    updateIconStatus(false);
                 }
             }
         } else {
-            // 离开选人界面，清理界面并重置状态
+            // 离开选人界面，清理一切
             if (injectedNodes.size > 0) clearInjected();
+            if (floatingIcon) removeFloatingIcon();
+            
             if (phase === 'InProgress' || phase === 'EndOfGame' || phase === 'None') {
                 partyId = null;
-                lastUploadSig = ''; // 重置上传指纹
-                lastOpponentSig = ''; // 重置对方数据指纹
+                lastUploadSig = '';
+                lastOpponentSig = '';
             }
         }
     }
