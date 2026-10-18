@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         大厅终极缝合怪 (RP/磨砂/金字)
+// @name         (RP/磨砂/金字)
 // @namespace    ultimate-lobby-plugin
 // @version      1.0.0
 // @match        https://riot:*/*
