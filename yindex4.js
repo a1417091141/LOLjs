@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，并带有透视悬浮图标
-// @version      4.3.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标
+// @version      5.0.0
 // ==/PenguLoader==
 
 (function () {
@@ -22,6 +22,7 @@
     // 悬浮图标元素
     let floatingIcon = null;
 
+    // ============ 基础网络请求 ============
     async function lcuGet(path) {
         try {
             const res = await fetch(path);
@@ -60,6 +61,7 @@
         }
     }
 
+    // ============ 上传己方数据 ============
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
 
@@ -85,6 +87,7 @@
         } catch (e) {}
     }
 
+    // ============ 拉取对方数据 ============
     async function fetchOpponent() {
         if (!partyId || !myPuuid) return null;
         
@@ -163,7 +166,7 @@
         }
     }
 
-    // ============ 界面清理 ============
+    // ============ 界面渲染与清理 ============
     function clearInjected() {
         for (const rec of injectedNodes) {
             if (!rec.el) continue;
@@ -187,6 +190,7 @@
     function applyChampionToObject(obj, championId, isLocked) {
         if (!obj || !championId) return;
 
+        // 1. 改头像
         const portrait = obj.querySelector('.champion-icons .portrait-icon');
         if (portrait) {
             portrait.style.display = '';
@@ -194,6 +198,7 @@
             injectedNodes.add({ el: portrait, type: 'portrait' });
         }
 
+        // 2. 改名字
         const primary = obj.querySelector('.summoner-primary-text');
         if (primary) {
             primary.classList.remove('hidden');
@@ -228,16 +233,27 @@
         opponent.players.forEach(p => {
             const cid = p.championId || p.championPickIntent || 0;
             if (!cid) return;
-            const slotId = 5 + (p.cellId || 0);
-            const obj = bySlot[slotId];
+            
+            // 【核心修复】完美兼容 0-4 和 5-9 的数据来源，全部映射到右侧 5-9
+            let localSlotId;
+            if (p.cellId >= 0 && p.cellId <= 4) {
+                localSlotId = 5 + p.cellId;
+            } else if (p.cellId >= 5 && p.cellId <= 9) {
+                localSlotId = 5 + (p.cellId % 5); 
+            } else {
+                localSlotId = 5 + (p.cellId % 5);
+            }
+
+            const obj = bySlot[localSlotId];
             if (obj) applyChampionToObject(obj, cid, !!p.championId);
         });
         
-        // 拉到数据了，图标亮起！
+        // 拿到数据了，点亮图标
         updateIconStatus(true);
         console.log('[OpponentDisplay] 对方数据已同步刷新');
     }
 
+    // ============ 主循环 ============
     async function poll() {
         const phase = await lcuGet('/lol-gameflow/v1/gameflow-phase');
         
@@ -255,20 +271,22 @@
                 if (!champMapLoaded) await loadChampionMap();
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
+                // 1. 上传己方数据（只有变了才上传）
                 if (partyId && myPuuid) {
                     await uploadMyTeam(session);
                 }
 
+                // 2. 拉取对方数据
                 const opponent = await fetchOpponent();
                 if (opponent && opponent.players) {
                     renderOpponent(opponent);
                 } else {
-                    // 如果没拉取到对方数据，图标变灰
+                    // 没拉取到数据，图标变灰
                     updateIconStatus(false);
                 }
             }
         } else {
-            // 离开选人界面，清理一切
+            // 离开选人界面，清理数据并隐藏图标
             if (injectedNodes.size > 0) clearInjected();
             if (floatingIcon) removeFloatingIcon();
             
