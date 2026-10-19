@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标
-// @version      5.0.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美显影版)
+// @version      7.0.0
 // ==/PenguLoader==
 
 (function () {
@@ -19,10 +19,8 @@
     let champMapLoaded = false;
     const injectedNodes = new Set();
     
-    // 悬浮图标元素
     let floatingIcon = null;
 
-    // ============ 基础网络请求 ============
     async function lcuGet(path) {
         try {
             const res = await fetch(path);
@@ -61,17 +59,14 @@
         }
     }
 
-    // ============ 上传己方数据 ============
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
-
         const players = (session.myTeam || []).map(p => ({
             puuid: p.puuid,
             cellId: p.cellId,
             championId: p.championId || 0,
             championPickIntent: p.championPickIntent || 0,
         }));
-
         const currentSig = JSON.stringify(players);
         if (currentSig === lastUploadSig) return;
         lastUploadSig = currentSig;
@@ -82,15 +77,11 @@
         formData.append('uploaderPuuid', myPuuid);
         formData.append('players', JSON.stringify(players));
 
-        try {
-            await fetch(SERVER_BASE, { method: 'POST', body: formData });
-        } catch (e) {}
+        try { await fetch(SERVER_BASE, { method: 'POST', body: formData }); } catch (e) {}
     }
 
-    // ============ 拉取对方数据 ============
     async function fetchOpponent() {
         if (!partyId || !myPuuid) return null;
-        
         const formData = new FormData();
         formData.append('action', 'opponent');
         formData.append('partyId', partyId);
@@ -104,40 +95,21 @@
         } catch (e) { return null; }
     }
 
-    // ============ 图标管理 ============
     function createFloatingIcon() {
         if (document.getElementById('opp-display-icon')) return;
-
         floatingIcon = document.createElement('div');
         floatingIcon.id = 'opp-display-icon';
-        
-        // 使用 SVG 绘制一个“眼睛/透视”图标
         floatingIcon.innerHTML = `
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 24px; height: 24px; transition: all 0.3s ease;">
                 <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" fill="currentColor"/>
             </svg>
         `;
-        
-        // 默认状态（灰色、半透明）
         floatingIcon.style.cssText = `
-            position: fixed;
-            top: 30px;
-            right: 30px;
-            width: 40px;
-            height: 40px;
-            background: rgba(0, 0, 0, 0.7);
-            border: 2px solid #555;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #888;
-            z-index: 999999;
-            pointer-events: none;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            transition: all 0.3s ease;
+            position: fixed; top: 30px; right: 30px; width: 40px; height: 40px;
+            background: rgba(0, 0, 0, 0.7); border: 2px solid #555; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; color: #888;
+            z-index: 999999; pointer-events: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: all 0.3s ease;
         `;
-        
         document.body.appendChild(floatingIcon);
     }
 
@@ -145,13 +117,11 @@
         if (!floatingIcon) return;
         const svg = floatingIcon.querySelector('svg');
         if (hasData) {
-            // 有数据时：金黄色，带发光效果
             floatingIcon.style.borderColor = '#c8aa6e';
             floatingIcon.style.color = '#c8aa6e';
             floatingIcon.style.boxShadow = '0 0 15px rgba(200, 170, 110, 0.8)';
             svg.style.transform = 'scale(1.1)';
         } else {
-            // 无数据时：灰色，平淡
             floatingIcon.style.borderColor = '#555';
             floatingIcon.style.color = '#888';
             floatingIcon.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
@@ -166,12 +136,13 @@
         }
     }
 
-    // ============ 界面渲染与清理 ============
     function clearInjected() {
         for (const rec of injectedNodes) {
             if (!rec.el) continue;
             try {
-                if (rec.type === 'portrait') {
+                if (rec.type === 'wrapper') {
+                    // 恢复原始状态很难，但只要不在选人阶段，UI 会被游戏自己重置，不用太担心
+                } else if (rec.type === 'portrait') {
                     rec.el.style.display = '';
                     rec.el.style.backgroundImage = '';
                 } else if (rec.type === 'primaryText') {
@@ -181,6 +152,8 @@
                     }
                     const glow = rec.el.querySelector('.summoner-primary-text-glow');
                     if (glow) glow.textContent = '';
+                } else if (rec.type === 'summonerName') {
+                    rec.el.style.display = '';
                 }
             } catch(e) {}
         }
@@ -190,15 +163,33 @@
     function applyChampionToObject(obj, championId, isLocked) {
         if (!obj || !championId) return;
 
-        // 1. 改头像
-        const portrait = obj.querySelector('.champion-icons .portrait-icon');
+        // 🚨 核心修复 1：干掉所有可能隐藏该玩家的状态类
+        const wrapper = obj.closest('.summoner-wrapper');
+        if (wrapper) {
+            wrapper.classList.remove('removed');
+            wrapper.classList.add('visible');
+        }
+        obj.classList.remove('removed');
+        obj.classList.add('visible');
+
+        const iconContainer = obj.querySelector('.champion-icon-container');
+        if (iconContainer) {
+            iconContainer.classList.remove('dim');
+        }
+
+        // 🚨 核心修复 2：用 setProperty 强行顶掉 display:none，并设置背景图
+        const portrait = obj.querySelector('.portrait-icon');
         if (portrait) {
-            portrait.style.display = '';
+            portrait.style.setProperty('display', 'block', 'important');
             portrait.style.backgroundImage = `url('/lol-game-data/assets/v1/champion-icons/${championId}.png')`;
+            portrait.style.backgroundSize = 'cover';
+            portrait.style.backgroundPosition = 'center';
+            portrait.style.width = '100%';
+            portrait.style.height = '100%';
             injectedNodes.add({ el: portrait, type: 'portrait' });
         }
 
-        // 2. 改名字
+        // 改名字
         const primary = obj.querySelector('.summoner-primary-text');
         if (primary) {
             primary.classList.remove('hidden');
@@ -207,9 +198,17 @@
             }
             const label = champName(championId) + (isLocked ? '' : '(预选)');
             primary.insertBefore(document.createTextNode(label), primary.firstChild);
+            
             const glow = primary.querySelector('.summoner-primary-text-glow');
             if (glow) glow.textContent = champName(championId);
             injectedNodes.add({ el: primary, type: 'primaryText' });
+        }
+
+        // 隐藏“对手 X”文字
+        const summonerName = obj.querySelector('.summoner-name');
+        if (summonerName) {
+            summonerName.style.display = 'none';
+            injectedNodes.add({ el: summonerName, type: 'summonerName' });
         }
     }
 
@@ -221,39 +220,25 @@
 
         clearInjected();
         
-        const objects = Array.from(document.querySelectorAll('.summoner-object.right:not(.is-self)'));
-        if (objects.length === 0) return;
+        // 注意这里：一定要找 .summoner-object.right，不要带上 :not(.is-self) 以免漏掉
+        const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
+        if (enemyObjects.length === 0) return;
 
-        const bySlot = {};
-        objects.forEach(obj => {
-            const m = (obj.className || '').match(/slot-id-(\d+)/);
-            if (m) bySlot[parseInt(m[1], 10)] = obj;
-        });
+        // 提取出确实有英雄的玩家
+        const validOpponents = opponent.players.filter(p => (p.championId || p.championPickIntent));
 
-        opponent.players.forEach(p => {
-            const cid = p.championId || p.championPickIntent || 0;
-            if (!cid) return;
-            
-            // 【核心修复】完美兼容 0-4 和 5-9 的数据来源，全部映射到右侧 5-9
-            let localSlotId;
-            if (p.cellId >= 0 && p.cellId <= 4) {
-                localSlotId = 5 + p.cellId;
-            } else if (p.cellId >= 5 && p.cellId <= 9) {
-                localSlotId = 5 + (p.cellId % 5); 
-            } else {
-                localSlotId = 5 + (p.cellId % 5);
-            }
-
-            const obj = bySlot[localSlotId];
-            if (obj) applyChampionToObject(obj, cid, !!p.championId);
+        // 按顺序填入，有几条数据填几个坑
+        validOpponents.forEach((p, index) => {
+            if (index >= enemyObjects.length) return;
+            const obj = enemyObjects[index];
+            const cid = p.championId || p.championPickIntent;
+            applyChampionToObject(obj, cid, !!p.championId);
         });
         
-        // 拿到数据了，点亮图标
         updateIconStatus(true);
         console.log('[OpponentDisplay] 对方数据已同步刷新');
     }
 
-    // ============ 主循环 ============
     async function poll() {
         const phase = await lcuGet('/lol-gameflow/v1/gameflow-phase');
         
@@ -262,31 +247,23 @@
         }
 
         if (phase === 'ChampSelect') {
-            // 进入选人界面，确保图标存在
             if (!floatingIcon) createFloatingIcon();
-
             const session = await lcuGet('/lol-champ-select/v1/session');
             if (session && session.myTeam) {
                 if (!myPuuid) await fetchMyPuuid();
                 if (!champMapLoaded) await loadChampionMap();
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
-                // 1. 上传己方数据（只有变了才上传）
-                if (partyId && myPuuid) {
-                    await uploadMyTeam(session);
-                }
+                if (partyId && myPuuid) await uploadMyTeam(session);
 
-                // 2. 拉取对方数据
                 const opponent = await fetchOpponent();
                 if (opponent && opponent.players) {
                     renderOpponent(opponent);
                 } else {
-                    // 没拉取到数据，图标变灰
                     updateIconStatus(false);
                 }
             }
         } else {
-            // 离开选人界面，清理数据并隐藏图标
             if (injectedNodes.size > 0) clearInjected();
             if (floatingIcon) removeFloatingIcon();
             
