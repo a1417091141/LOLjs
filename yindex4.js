@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美多排去重版)
-// @version      8.0.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美版)
+// @version      10.0.0
 // ==/PenguLoader==
 
 (function () {
@@ -52,15 +52,14 @@
     }
 
     async function updatePartyId() {
-        // 只有在大厅、匹配、选人阶段才去拉
         const lobby = await lcuGet('/lol-lobby/v2/lobby');
         if (lobby && lobby.partyId) {
             if (partyId !== lobby.partyId) {
                 partyId = lobby.partyId;
                 sessionStorage.setItem('opp_display_party_id', partyId);
-                lastOpponentSig = ''; // 换了房间，清空上次拉取记录
+                lastOpponentSig = ''; 
                 lastUploadSig = '';
-                console.log('[OpponentDisplay] 已更新当前房间 ID:', partyId);
+                console.log('[OpponentDisplay] 房间已更新:', partyId);
             }
         }
     }
@@ -176,9 +175,7 @@
         obj.classList.add('visible');
 
         const iconContainer = obj.querySelector('.champion-icon-container');
-        if (iconContainer) {
-            iconContainer.classList.remove('dim');
-        }
+        if (iconContainer) iconContainer.classList.remove('dim');
 
         const portrait = obj.querySelector('.portrait-icon');
         if (portrait) {
@@ -212,27 +209,11 @@
         }
     }
 
-    function renderOpponent(opponentData) {
-        // 🚨 核心修复 1：解析 JSON 并合并所有上传上来的数据
-        let allPlayers = [];
-        if (opponentData) {
-            for (const uploaderId in opponentData) {
-                const upload = opponentData[uploaderId];
-                if (upload && Array.isArray(upload.players)) {
-                    allPlayers = allPlayers.concat(upload.players);
-                }
-            }
-        }
-
-        // 去重（同一个玩家可能被多个队友重复上传）
-        const uniqueMap = new Map();
-        allPlayers.forEach(p => {
-            if (p.puuid && (p.championId || p.championPickIntent)) {
-                // 只留已锁定或预选的
-                uniqueMap.set(p.puuid, p);
-            }
-        });
-        const finalPlayers = Array.from(uniqueMap.values());
+    function renderOpponent(opponent) {
+        // 🚨 现在 PHP 已经返回标准的 {"players": [...]} 了，直接读
+        if (!opponent || !opponent.players) return;
+        
+        const finalPlayers = opponent.players.filter(p => p.championId || p.championPickIntent);
 
         const sig = JSON.stringify(finalPlayers);
         if (sig === lastOpponentSig || finalPlayers.length === 0) return;
@@ -243,7 +224,6 @@
         const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
         if (enemyObjects.length === 0) return;
 
-        // 按顺序填入
         finalPlayers.forEach((p, index) => {
             if (index >= enemyObjects.length) return;
             const obj = enemyObjects[index];
@@ -258,7 +238,6 @@
     async function poll() {
         const phase = await lcuGet('/lol-gameflow/v1/gameflow-phase');
         
-        // 🚨 核心修复 2：不管在什么阶段，只要没 partyId 或者是新房间，就去强拉一次最新的
         if (phase === 'Lobby' || phase === 'Matchmaking' || phase === 'ChampSelect') {
             await updatePartyId();
         }
@@ -270,13 +249,12 @@
                 if (!myPuuid) await fetchMyPuuid();
                 if (!champMapLoaded) await loadChampionMap();
                 
-                // 用 sessionStorage 里的旧值兜底
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
                 if (partyId && myPuuid) await uploadMyTeam(session);
 
                 const opponent = await fetchOpponent();
-                if (opponent) {
+                if (opponent && opponent.players) {
                     renderOpponent(opponent);
                 } else {
                     updateIconStatus(false);
