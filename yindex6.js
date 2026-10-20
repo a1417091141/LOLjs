@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         海克斯自动选人 (完美自定义检测版)
 // @description  适配LOL原生风格，DataStore持久化，新增仅自定义模式生效选项
-// @version      414.1.0
+// @version      414.2.0
 // ==/PenguLoader==
 
 (function () {
@@ -17,7 +17,7 @@
     let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
     let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
     
-    // 如果你希望默认勾选，把这里的 false 改成 true
+    // 默认不勾选，如果你希望默认勾选，把 false 改成 true
     let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true; 
 
     let allChampions = [];
@@ -126,6 +126,7 @@
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
             
+            // 🚨 核心布局调整：将复选框放在左侧，保底策略文字和下拉框放在右侧
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -148,20 +149,20 @@
                     </div>
                 </div>
                 <div style="padding: 10px 15px; border-top: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2);">
-                    <div style="display: flex; flex-direction: column; gap: 8px;">
-                        <div style="display:flex; align-items:center; gap: 6px; cursor:pointer;" id="custom-checkbox-label">
-                            <input type="checkbox" id="custom-only-checkbox" ${customOnly ? 'checked' : ''} style="cursor:pointer; accent-color: #C8AA6E;">
-                            <span style="color: #A09B8C; font-size: 12px;">仅自定义/训练营生效</span>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
-                        </div>
+                    <!-- 左侧：复选框 -->
+                    <div style="display:flex; align-items:center; gap: 6px; cursor:pointer;" id="custom-checkbox-label">
+                        <input type="checkbox" id="custom-only-checkbox" ${customOnly ? 'checked' : ''} style="cursor:pointer; accent-color: #C8AA6E;">
+                        <span style="color: #A09B8C; font-size: 12px;">仅自定义/训练营生效</span>
                     </div>
-                    <select id="fallback-select" style="background: #000; color: #C8AA6E; border: 1px solid #3C2E14; padding: 6px; font-size: 12px; cursor: pointer;">
-                        <option value="random" ${fallbackStrategy === 'random' ? 'selected' : ''}>随机选一个</option>
-                        <option value="rightmost" ${fallbackStrategy === 'rightmost' ? 'selected' : ''}>固定选最右侧</option>
-                        <option value="none" ${fallbackStrategy === 'none' ? 'selected' : ''}>不秒选（等手动）</option>
-                    </select>
+                    <!-- 右侧：保底策略文字 + 下拉框 -->
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
+                        <select id="fallback-select" style="background: #000; color: #C8AA6E; border: 1px solid #3C2E14; padding: 6px; font-size: 12px; cursor: pointer;">
+                            <option value="random" ${fallbackStrategy === 'random' ? 'selected' : ''}>随机选一个</option>
+                            <option value="rightmost" ${fallbackStrategy === 'rightmost' ? 'selected' : ''}>固定选最右侧</option>
+                            <option value="none" ${fallbackStrategy === 'none' ? 'selected' : ''}>不秒选（等手动）</option>
+                        </select>
+                    </div>
                 </div>
             `;
             document.body.appendChild(panel);
@@ -290,7 +291,6 @@
     async function runEngine() {
         if (!isEnabled) return;
         
-        // 🚨 核心拦截：如果勾选了仅自定义，且当前不是自定义模式，直接跳过
         if (customOnly && !isCustomGame) {
             return;
         }
@@ -301,8 +301,6 @@
             const session = await res.json();
             if (!session.benchEnabled) return;
 
-            // 🚨 从 session 中获取最准确的模式判断
-            // isCustomGame 字段是官方 API 返回的，如果是 true 则绝对是自定义/训练营
             isCustomGame = session.isCustomGame === true;
 
             const myCellId = session.localPlayerCellId;
@@ -413,7 +411,7 @@
                     hasLockedInitial = false;
                     hasSwappedOnce = false;
                     swapTargetId = null;
-                    isCustomGame = false; // 离开选人重置状态
+                    isCustomGame = false; 
                 }
 
                 if (phase === 'Lobby' || phase === 'Matchmaking') {
