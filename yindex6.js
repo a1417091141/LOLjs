@@ -1,12 +1,13 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (暗金一体美化版)
+// @name         海克斯自动选人 (暗金一体美化版 - 完美持久化)
 // @description  适配LOL原生风格，齿轮图标美化并上移，完美融合
-// @version      410.0.0
+// @version      411.0.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
+    // ===== 持久化读取 =====
     let allChampions = [];
     let isEnabled = localStorage.getItem('auto_pick_enabled') === 'true';
     let fallbackStrategy = localStorage.getItem('auto_pick_fallback') || 'random';
@@ -22,7 +23,7 @@
     const WUKONG_ID = 62;
 
     let swapTargetId = null;
-    let lastSwapAttemptTime = 0; // 防抖时间戳
+    let lastSwapAttemptTime = 0;
 
     // ===== 日志系统 =====
     const LOG_MAX = 14;
@@ -200,6 +201,7 @@
                 display: none; flex-direction: column; font-family: 'Microsoft YaHei';
             `;
 
+            // 🚨 初始化渲染：将读取到的状态赋值给 UI 控件
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -237,6 +239,7 @@
             `;
             document.body.appendChild(panel);
 
+            // 恢复开关状态
             const mainToggle = document.getElementById('native-toggle');
             mainToggle.onclick = () => {
                 isEnabled = !isEnabled;
@@ -246,12 +249,14 @@
                 log(`自动选人 ${isEnabled ? '开启' : '关闭'}`, isEnabled ? '#2ECC71' : '#E74C3C');
             };
 
+            // 恢复保底策略状态
             const fbSelect = document.getElementById('fallback-select');
             fbSelect.onchange = (e) => {
                 fallbackStrategy = e.target.value;
                 localStorage.setItem('auto_pick_fallback', fallbackStrategy);
             };
 
+            // 事件绑定
             document.getElementById('aug-search').oninput = (e) => renderUI(e.target.value);
             document.getElementById('aug-btn-clear').onclick = () => {
                 if (confirm('确定要清空所有优先级吗？')) {
@@ -261,10 +266,11 @@
                 }
             };
 
-            renderUI('');
+            renderUI(''); // 初始化渲染列表
         }
     }
 
+    // 渲染列表 (保持你的原样)
     function renderUI(keyword = '') {
         const allList = document.getElementById('aug-all-list');
         const priorityListEl = document.getElementById('aug-priority-list');
@@ -396,11 +402,12 @@
         });
     }
 
+    // 保存优先级
     function savePriority() {
         localStorage.setItem('auto_pick_priority', JSON.stringify(priorityList));
     }
 
-    // 核心引擎
+    // ===== 核心引擎 =====
     async function runEngine() {
         if (!isEnabled) return;
         try {
@@ -413,15 +420,12 @@
             const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
             if (!myPlayer) { log('找不到 myPlayer', '#E74C3C'); return; }
 
-            // ===== 实时备选池 =====
             let offered = [];
             if (Array.isArray(session.benchChampions) && session.benchChampions.length > 0) {
-                offered = session.benchChampions
-                    .map(b => b.championId)
-                    .filter(id => id && id > 0);
+                offered = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
             }
 
-            // ===== 初始选人 =====
+            // 初始选人
             if (!hasLockedInitial) {
                 if (offered.length === 0) {
                     try {
@@ -466,7 +470,7 @@
                 return; 
             }
 
-            // ===== 换牌阶段 =====
+            // 换牌阶段
             if (hasSwappedOnce) { return; }
 
             if (myPlayer.championId === WUKONG_ID) {
@@ -474,7 +478,6 @@
                 return;
             }
 
-            // 实时备选池日志
             if (offered.length === 0) {
                 log('实时备选池为空（队友还没选/bench 未生成）', '#6B6B6B');
             } else {
@@ -482,7 +485,6 @@
                 log(`实时备选池[${offered.length}]: ${offeredDesc}`, '#00CED1');
             }
 
-            // 如果当前已经是目标英雄，直接算成功
             if (swapTargetId !== null) {
                 if (myPlayer.championId === swapTargetId) {
                     hasSwappedOnce = true;
@@ -497,7 +499,6 @@
                     log(`目标 ${champName(swapTargetId)} 已不在实时备选池，重新计算`, '#E67E22');
                     swapTargetId = null;
                 } else {
-                    // 🚨 防抖：距离上次请求超过 800ms 才重试
                     if (Date.now() - lastSwapAttemptTime > 800) {
                         lastSwapAttemptTime = Date.now();
                         const swapRes = await fetch(`/lol-champ-select/v1/session/bench/swap/${swapTargetId}`, {
@@ -505,8 +506,6 @@
                             headers: { 'Content-Type': 'application/json' }
                         });
                         log(`重试 swap → ${champName(swapTargetId)} (HTTP ${swapRes.status})`, swapRes.ok ? '#2ECC71' : '#E74C3C');
-                    } else {
-                        // 冷却中，静默等待
                     }
                     return;
                 }
