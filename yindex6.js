@@ -1,19 +1,24 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (完美持久化版)
-// @description  适配LOL原生风格，使用 DataStore 真正持久化，开关和列表重启后永久保存
-// @version      413.1.1
+// @name         海克斯自动选人 (完美自定义检测版)
+// @description  适配LOL原生风格，DataStore持久化，新增仅自定义模式生效选项
+// @version      414.1.0
 // ==/PenguLoader==
+
 (function () {
     'use strict';
 
-    // ===== 1. 顶级持久化读取 (DataStore 真正落盘) =====
+    // ===== 1. 持久化读取 =====
     const KEY_ENABLED = 'auto_pick_enabled';
     const KEY_FALLBACK = 'auto_pick_fallback';
     const KEY_PRIORITY = 'auto_pick_priority';
+    const KEY_CUSTOM_ONLY = 'auto_pick_custom_only'; 
 
     let isEnabled = DataStore.get(KEY_ENABLED, false);
     let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
     let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
+    
+    // 如果你希望默认勾选，把这里的 false 改成 true
+    let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true; 
 
     let allChampions = [];
     let checkTimer = null;
@@ -24,6 +29,7 @@
     const WUKONG_ID = 62;
     let swapTargetId = null;
     let lastSwapAttemptTime = 0;
+    let isCustomGame = false; 
 
     // ===== 2. 英雄数据加载 =====
     const DATA_API_ORIGIN = "https://data.dtodo.cn";
@@ -57,7 +63,6 @@
                 });
                 allChampions = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
 
-                // 数据加载完后强制重绘一次界面
                 if (document.getElementById('augment-auto-pick-panel')) {
                     renderUI();
                 }
@@ -90,7 +95,7 @@
         }
     }, true);
 
-    // ===== 3. 界面注入与状态绑定 =====
+    // ===== 3. 界面注入 =====
     function injectUI() {
         const target = document.querySelector('.open-party-toggle');
         if (!target) return;
@@ -120,6 +125,7 @@
             const panel = document.createElement('div');
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
+            
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -142,8 +148,14 @@
                     </div>
                 </div>
                 <div style="padding: 10px 15px; border-top: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2);">
-                    <div style="display: flex; flex-direction: column; gap: 3px;">
-                        <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div style="display:flex; align-items:center; gap: 6px; cursor:pointer;" id="custom-checkbox-label">
+                            <input type="checkbox" id="custom-only-checkbox" ${customOnly ? 'checked' : ''} style="cursor:pointer; accent-color: #C8AA6E;">
+                            <span style="color: #A09B8C; font-size: 12px;">仅自定义/训练营生效</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
+                        </div>
                     </div>
                     <select id="fallback-select" style="background: #000; color: #C8AA6E; border: 1px solid #3C2E14; padding: 6px; font-size: 12px; cursor: pointer;">
                         <option value="random" ${fallbackStrategy === 'random' ? 'selected' : ''}>随机选一个</option>
@@ -166,6 +178,19 @@
             fbSelect.onchange = (e) => {
                 fallbackStrategy = e.target.value;
                 DataStore.set(KEY_FALLBACK, fallbackStrategy);
+            };
+            
+            const customCheckbox = document.getElementById('custom-only-checkbox');
+            customCheckbox.onchange = (e) => {
+                customOnly = e.target.checked;
+                DataStore.set(KEY_CUSTOM_ONLY, customOnly);
+            };
+            document.getElementById('custom-checkbox-label').onclick = (e) => {
+                if (e.target !== customCheckbox) {
+                    customCheckbox.checked = !customCheckbox.checked;
+                    customOnly = customCheckbox.checked;
+                    DataStore.set(KEY_CUSTOM_ONLY, customOnly);
+                }
             };
 
             document.getElementById('aug-search').oninput = (e) => renderUI(e.target.value);
@@ -264,11 +289,21 @@
     // ===== 5. 核心引擎 =====
     async function runEngine() {
         if (!isEnabled) return;
+        
+        // 🚨 核心拦截：如果勾选了仅自定义，且当前不是自定义模式，直接跳过
+        if (customOnly && !isCustomGame) {
+            return;
+        }
+        
         try {
             const res = await fetch('/lol-champ-select/v1/session');
             if (!res.ok) return;
             const session = await res.json();
             if (!session.benchEnabled) return;
+
+            // 🚨 从 session 中获取最准确的模式判断
+            // isCustomGame 字段是官方 API 返回的，如果是 true 则绝对是自定义/训练营
+            isCustomGame = session.isCustomGame === true;
 
             const myCellId = session.localPlayerCellId;
             const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
@@ -365,15 +400,11 @@
             try {
                 const phaseRes = await fetch('/lol-gameflow/v1/gameflow-phase');
                 const phase = await phaseRes.json();
-                if (phase === 'Lobby' || phase === 'Matchmaking') {
-                    injectUI();
-                } else {
-                    isPanelOpen = false;
-                    const panel = document.getElementById('augment-auto-pick-panel');
-                    if (panel) panel.style.display = 'none';
-                }
+                
                 if (phase === 'ChampSelect') {
-                    if (!checkTimer) checkTimer = setInterval(runEngine, 300);
+                    if (!checkTimer) {
+                        checkTimer = setInterval(runEngine, 300);
+                    }
                 } else {
                     if (checkTimer) {
                         clearInterval(checkTimer);
@@ -382,6 +413,15 @@
                     hasLockedInitial = false;
                     hasSwappedOnce = false;
                     swapTargetId = null;
+                    isCustomGame = false; // 离开选人重置状态
+                }
+
+                if (phase === 'Lobby' || phase === 'Matchmaking') {
+                    injectUI();
+                } else {
+                    isPanelOpen = false;
+                    const panel = document.getElementById('augment-auto-pick-panel');
+                    if (panel) panel.style.display = 'none';
                 }
             } catch (e) {}
         }, 1000);
