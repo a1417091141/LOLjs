@@ -1,23 +1,19 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (持久化防覆盖版)
-// @description  彻底解决持久化丢失问题，绝不被空数据覆盖
-// @version      414.0.0
+// @name         海克斯自动选人 (完美持久化版)
+// @description  适配LOL原生风格，使用 DataStore 真正持久化，开关和列表重启后永久保存
+// @version      413.1.0
 // ==/PenguLoader==
-
 (function () {
     'use strict';
 
-    // ===== 1. 读取数据 =====
+    // ===== 1. 顶级持久化读取 (DataStore 真正落盘) =====
     const KEY_ENABLED = 'auto_pick_enabled';
     const KEY_FALLBACK = 'auto_pick_fallback';
     const KEY_PRIORITY = 'auto_pick_priority';
 
-    let isEnabled = localStorage.getItem(KEY_ENABLED) === 'true';
-    let fallbackStrategy = localStorage.getItem(KEY_FALLBACK) || 'random';
-    let priorityList = [];
-    try {
-        priorityList = JSON.parse(localStorage.getItem(KEY_PRIORITY) || '[]');
-    } catch(e) { priorityList = []; }
+    let isEnabled = DataStore.get(KEY_ENABLED, false);
+    let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
+    let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
 
     let allChampions = [];
     let checkTimer = null;
@@ -67,7 +63,7 @@
         ).join('');
     }
 
-    // ===== 数据加载 =====
+    // ===== 2. 英雄数据加载 =====
     const DATA_API_ORIGIN = "https://data.dtodo.cn";
     const DATA_API_PREFIX = "/api/client/v1";
 
@@ -78,17 +74,15 @@
             const conf = await confRes.json();
             const manifestRes = await fetch(`${DATA_API_ORIGIN}${conf.manifest}`);
             const manifest = await manifestRes.json();
-
             let champFile = null;
             for (const f of manifest.files || []) {
                 if (f.path === "champions.json") { champFile = f.url; break; }
             }
-
             if (champFile) {
                 const champsRes = await fetch(`${DATA_API_ORIGIN}${champFile}`);
                 const champsData = await champsRes.json();
                 const data = champsData.data || [];
-                
+
                 const uniqueMap = new Map();
                 data.forEach(c => {
                     if (c.id && c.name && !uniqueMap.has(c.id)) {
@@ -101,8 +95,8 @@
                 });
                 allChampions = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
                 log(`英雄数据加载完成 (${allChampions.length})`, '#2ECC71');
-                
-                // 🚨 确保加载完后，强制渲染一次（如果面板已开）
+
+                // 数据加载完后强制重绘一次界面
                 if (document.getElementById('augment-auto-pick-panel')) {
                     renderUI();
                 }
@@ -118,30 +112,47 @@
         return c ? c.name : `#${id}`;
     }
 
-    // ===== UI 注入 =====
+    function champTag(id) {
+        if (!id) return '无';
+        const name = champName(id);
+        if (id === WUKONG_ID) return `${name}[悟空]`;
+        const idx = priorityList.indexOf(id);
+        if (idx === -1) return `${name}(无)`;
+        return `${name}(${idx + 1})`;
+    }
+
+    document.addEventListener('mousedown', (e) => {
+        if (!isPanelOpen) return;
+        const panel = document.getElementById('augment-auto-pick-panel');
+        const triggerBtn = document.getElementById('augment-auto-pick-trigger');
+        if (panel && !panel.contains(e.target) && triggerBtn && !triggerBtn.contains(e.target)) {
+            isPanelOpen = false;
+            panel.style.display = 'none';
+        }
+    }, true);
+
+    // ===== 3. 界面注入与状态绑定 =====
     function injectUI() {
         const target = document.querySelector('.open-party-toggle');
         if (!target) return;
-
         target.style.transform = 'translateY(-15px)';
 
         if (!document.getElementById('augment-auto-pick-trigger')) {
             const triggerBtn = document.createElement('div');
             triggerBtn.id = 'augment-auto-pick-trigger';
             triggerBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#C8AA6E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
-            
+
             triggerBtn.style.cssText = `position: absolute; bottom: -38px; right: 20px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #1E2328 0%, #0A0E12 100%); border: 1px solid #785A28; border-radius: 4px; z-index: 9999; box-shadow: 0 2px 5px rgba(0,0,0,0.5); transition: all 0.2s;`;
-            
+
             triggerBtn.onmouseenter = () => { triggerBtn.style.borderColor = '#C8AA6E'; triggerBtn.querySelector('svg').setAttribute('stroke', '#F0E6D2'); };
             triggerBtn.onmouseleave = () => { triggerBtn.style.borderColor = '#785A28'; triggerBtn.querySelector('svg').setAttribute('stroke', '#C8AA6E'); };
-            
+
             triggerBtn.onclick = () => {
                 isPanelOpen = !isPanelOpen;
                 const p = document.getElementById('augment-auto-pick-panel');
                 p.style.display = isPanelOpen ? 'flex' : 'none';
-                if (isPanelOpen) renderUI(); 
+                if (isPanelOpen) renderUI();
             };
-
             if (window.getComputedStyle(target).position === 'static') target.style.position = 'relative';
             target.appendChild(triggerBtn);
         }
@@ -150,8 +161,6 @@
             const panel = document.createElement('div');
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
-
-            // 面板 HTML：所有状态直接从内存变量读取，确保初始化正确
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -189,7 +198,7 @@
             const mainToggle = document.getElementById('native-toggle');
             mainToggle.onclick = () => {
                 isEnabled = !isEnabled;
-                localStorage.setItem(KEY_ENABLED, isEnabled.toString()); // 点击立即存
+                DataStore.set(KEY_ENABLED, isEnabled);
                 mainToggle.style.background = isEnabled ? '#2ECC71' : '#3C2E14';
                 mainToggle.querySelector('div').style.left = isEnabled ? '22px' : '2px';
                 log(`自动选人 ${isEnabled ? '开启' : '关闭'}`, isEnabled ? '#2ECC71' : '#E74C3C');
@@ -198,31 +207,29 @@
             const fbSelect = document.getElementById('fallback-select');
             fbSelect.onchange = (e) => {
                 fallbackStrategy = e.target.value;
-                localStorage.setItem(KEY_FALLBACK, fallbackStrategy); // 改变立即存
+                DataStore.set(KEY_FALLBACK, fallbackStrategy);
             };
 
             document.getElementById('aug-search').oninput = (e) => renderUI(e.target.value);
             document.getElementById('aug-btn-clear').onclick = () => {
                 if (confirm('确定要清空所有优先级吗？')) {
                     priorityList = [];
-                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 清空立即存
+                    DataStore.set(KEY_PRIORITY, priorityList);
                     renderUI();
                 }
             };
-
             renderUI('');
         }
     }
 
-    // ===== 渲染函数 =====
+    // ===== 4. 渲染函数 =====
     function renderUI(keyword = '') {
         const allList = document.getElementById('aug-all-list');
         const priorityListEl = document.getElementById('aug-priority-list');
         if (!allList || !priorityListEl) return;
 
-        // 🚨 核心防覆盖锁：如果英雄没加载完，就显示“加载中”，绝对不覆盖你刚才看到的空数据
         if (allChampions.length === 0) {
-            priorityListEl.innerHTML = '<div style="color:#6B6B6B; font-size:12px;">正在加载英雄数据，请稍后...</div>';
+            priorityListEl.innerHTML = '<div style="color:#6B6B6B; font-size:12px;">正在加载英雄数据...</div>';
             return;
         }
 
@@ -230,12 +237,11 @@
         priorityList.forEach((id, index) => {
             const champ = allChampions.find(c => c.id === id);
             if (!champ) return;
-
             const item = document.createElement('div');
             item.draggable = true;
             item.dataset.index = index;
             item.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 4px; position: relative; cursor: grab;`;
-            
+
             item.innerHTML = `
                 <span style="font-size: 14px; color: #5A4A2A; width: 12px;">⋮⋮</span>
                 <span style="font-size: 10px; color: #C8AA6E; width: 15px;">${index + 1}</span>
@@ -250,7 +256,11 @@
 
             item.ondragstart = (e) => { dragSrcIndex = index; item.style.opacity = '0.4'; e.dataTransfer.effectAllowed = 'move'; };
             item.ondragend = () => { dragSrcIndex = null; item.style.opacity = ''; };
-            item.ondragover = (e) => { e.preventDefault(); item.style.borderTop = (e.clientY - item.getBoundingClientRect().top < item.offsetHeight/2) ? '2px solid #C8AA6E' : ''; item.style.borderBottom = !(e.clientY - item.getBoundingClientRect().top < item.offsetHeight/2) ? '2px solid #C8AA6E' : ''; };
+            item.ondragover = (e) => {
+                e.preventDefault();
+                item.style.borderTop = (e.clientY - item.getBoundingClientRect().top < item.offsetHeight / 2) ? '2px solid #C8AA6E' : '';
+                item.style.borderBottom = !(e.clientY - item.getBoundingClientRect().top < item.offsetHeight / 2) ? '2px solid #C8AA6E' : '';
+            };
             item.ondragleave = () => { item.style.borderTop = ''; item.style.borderBottom = ''; };
             item.ondrop = (e) => {
                 e.preventDefault();
@@ -259,7 +269,7 @@
                 const [moved] = priorityList.splice(dragSrcIndex, 1);
                 let insertAt = (dragSrcIndex < index) ? (before ? index - 1 : index) : (before ? index : index + 1);
                 priorityList.splice(insertAt, 0, moved);
-                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 拖拽存
+                DataStore.set(KEY_PRIORITY, priorityList);
                 renderUI();
             };
 
@@ -270,7 +280,7 @@
                     if (a === 'up' && index > 0) [priorityList[index - 1], priorityList[index]] = [priorityList[index], priorityList[index - 1]];
                     else if (a === 'down' && index < priorityList.length - 1) [priorityList[index + 1], priorityList[index]] = [priorityList[index], priorityList[index + 1]];
                     else if (a === 'del') priorityList.splice(index, 1);
-                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 操作存
+                    DataStore.set(KEY_PRIORITY, priorityList);
                     renderUI();
                 };
             });
@@ -281,20 +291,19 @@
         allChampions.forEach(champ => {
             if (keyword && !champ.name.includes(keyword)) return;
             if (priorityList.includes(champ.id)) return;
-
             const item = document.createElement('div');
             item.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px; cursor: pointer;`;
             item.innerHTML = `<img src="${champ.icon}" style="width: 24px; height: 24px; border-radius: 50%;"><span style="color: #A09B8C; font-size: 12px;">${champ.name}</span>`;
             item.onclick = () => {
                 priorityList.push(champ.id);
-                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 添加存
+                DataStore.set(KEY_PRIORITY, priorityList);
                 renderUI();
             };
             allList.appendChild(item);
         });
     }
 
-    // ===== 核心引擎 =====
+    // ===== 5. 核心引擎 =====
     async function runEngine() {
         if (!isEnabled) return;
         try {
@@ -340,20 +349,26 @@
                 }
 
                 const lockRes = await fetch(`/lol-champ-select/v1/session/actions/${action.id}`, {
-                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ championId: bestId, completed: true })
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ championId: bestId, completed: true })
                 });
-
                 if (lockRes.ok) hasLockedInitial = true;
-                return; 
+                return;
             }
 
             if (hasSwappedOnce) return;
             if (myPlayer.championId === WUKONG_ID) return;
 
             if (swapTargetId !== null) {
-                if (myPlayer.championId === swapTargetId) { hasSwappedOnce = true; swapTargetId = null; return; }
-                if (!offered.includes(swapTargetId)) swapTargetId = null;
-                else {
+                if (myPlayer.championId === swapTargetId) {
+                    hasSwappedOnce = true;
+                    swapTargetId = null;
+                    return;
+                }
+                if (!offered.includes(swapTargetId)) {
+                    swapTargetId = null;
+                } else {
                     if (Date.now() - lastSwapAttemptTime > 800) {
                         lastSwapAttemptTime = Date.now();
                         await fetch(`/lol-champ-select/v1/session/bench/swap/${swapTargetId}`, { method: 'POST' });
@@ -370,7 +385,10 @@
                 let bestTargetPriorityIndex = currentPriorityIndex;
                 for (const offeredId of offered) {
                     const pIndex = priorityList.indexOf(offeredId);
-                    if (pIndex !== -1 && pIndex < bestTargetPriorityIndex) { bestTargetId = offeredId; bestTargetPriorityIndex = pIndex; }
+                    if (pIndex !== -1 && pIndex < bestTargetPriorityIndex) {
+                        bestTargetId = offeredId;
+                        bestTargetPriorityIndex = pIndex;
+                    }
                 }
             }
 
@@ -386,12 +404,10 @@
     const init = async () => {
         log('脚本启动，加载英雄数据...', '#3498DB');
         loadAllChampions();
-
         setInterval(async () => {
             try {
                 const phaseRes = await fetch('/lol-gameflow/v1/gameflow-phase');
                 const phase = await phaseRes.json();
-
                 if (phase === 'Lobby' || phase === 'Matchmaking') {
                     injectUI();
                 } else {
@@ -399,11 +415,13 @@
                     const panel = document.getElementById('augment-auto-pick-panel');
                     if (panel) panel.style.display = 'none';
                 }
-
                 if (phase === 'ChampSelect') {
                     if (!checkTimer) checkTimer = setInterval(runEngine, 300);
                 } else {
-                    if (checkTimer) { clearInterval(checkTimer); checkTimer = null; }
+                    if (checkTimer) {
+                        clearInterval(checkTimer);
+                        checkTimer = null;
+                    }
                     hasLockedInitial = false;
                     hasSwappedOnce = false;
                     swapTargetId = null;
@@ -417,5 +435,4 @@
     } else {
         window.addEventListener('DOMContentLoaded', () => setTimeout(init, 1000));
     }
-
 })();
