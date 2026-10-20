@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         海克斯自动选人 (完美自定义检测版)
-// @description  适配LOL原生风格，DataStore持久化，新增仅自定义模式生效选项
-// @version      414.2.0
+// @description  适配LOL原生风格，DataStore持久化，完美兼容国服海克斯大乱斗 (3270)
+// @version      414.4.0
 // ==/PenguLoader==
 
 (function () {
@@ -17,7 +17,6 @@
     let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
     let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
     
-    // 默认不勾选，如果你希望默认勾选，把 false 改成 true
     let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true; 
 
     let allChampions = [];
@@ -126,7 +125,6 @@
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
             
-            // 🚨 核心布局调整：将复选框放在左侧，保底策略文字和下拉框放在右侧
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -149,12 +147,10 @@
                     </div>
                 </div>
                 <div style="padding: 10px 15px; border-top: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2);">
-                    <!-- 左侧：复选框 -->
                     <div style="display:flex; align-items:center; gap: 6px; cursor:pointer;" id="custom-checkbox-label">
                         <input type="checkbox" id="custom-only-checkbox" ${customOnly ? 'checked' : ''} style="cursor:pointer; accent-color: #C8AA6E;">
-                        <span style="color: #A09B8C; font-size: 12px;">仅自定义/训练营生效</span>
+                        <span style="color: #A09B8C; font-size: 12px;">仅自定义/特殊模式生效</span>
                     </div>
-                    <!-- 右侧：保底策略文字 + 下拉框 -->
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
                         <select id="fallback-select" style="background: #000; color: #C8AA6E; border: 1px solid #3C2E14; padding: 6px; font-size: 12px; cursor: pointer;">
@@ -291,17 +287,21 @@
     async function runEngine() {
         if (!isEnabled) return;
         
-        if (customOnly && !isCustomGame) {
-            return;
-        }
-        
         try {
             const res = await fetch('/lol-champ-select/v1/session');
             if (!res.ok) return;
             const session = await res.json();
             if (!session.benchEnabled) return;
 
-            isCustomGame = session.isCustomGame === true;
+            // 🚨 核心修复：直接把国服 3270 加入白名单，同时兼容 KIWI 游戏模式
+            const queueId = session.queueId;
+            const isKiwi = (session.gameMode === 'KIWI');
+            
+            isCustomGame = [0, 1700, 1710, 3100, 3130, 3270].includes(queueId) || isKiwi || session.isCustomGame === true;
+
+            if (customOnly && !isCustomGame) {
+                return;
+            }
 
             const myCellId = session.localPlayerCellId;
             const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
