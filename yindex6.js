@@ -1,13 +1,13 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (完美持久化版)
-// @description  适配LOL原生风格，彻底修复状态丢失问题，开关和列表永久保存
-// @version      413.0.0
+// @name         海克斯自动选人 (持久化防覆盖版)
+// @description  彻底解决持久化丢失问题，绝不被空数据覆盖
+// @version      414.0.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
-    // ===== 1. 顶级持久化读取 (参考粒子特效) =====
+    // ===== 1. 读取数据 =====
     const KEY_ENABLED = 'auto_pick_enabled';
     const KEY_FALLBACK = 'auto_pick_fallback';
     const KEY_PRIORITY = 'auto_pick_priority';
@@ -67,7 +67,7 @@
         ).join('');
     }
 
-    // ===== 2. 英雄数据加载 =====
+    // ===== 数据加载 =====
     const DATA_API_ORIGIN = "https://data.dtodo.cn";
     const DATA_API_PREFIX = "/api/client/v1";
 
@@ -102,7 +102,7 @@
                 allChampions = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
                 log(`英雄数据加载完成 (${allChampions.length})`, '#2ECC71');
                 
-                // 🚨 核心修复：数据加载完后，强制重绘一次界面！确保列表出来
+                // 🚨 确保加载完后，强制渲染一次（如果面板已开）
                 if (document.getElementById('augment-auto-pick-panel')) {
                     renderUI();
                 }
@@ -118,26 +118,7 @@
         return c ? c.name : `#${id}`;
     }
 
-    function champTag(id) {
-        if (!id) return '无';
-        const name = champName(id);
-        if (id === WUKONG_ID) return `${name}[悟空]`;
-        const idx = priorityList.indexOf(id);
-        if (idx === -1) return `${name}(无)`;
-        return `${name}(${idx + 1})`;
-    }
-
-    document.addEventListener('mousedown', (e) => {
-        if (!isPanelOpen) return;
-        const panel = document.getElementById('augment-auto-pick-panel');
-        const triggerBtn = document.getElementById('augment-auto-pick-trigger');
-        if (panel && !panel.contains(e.target) && triggerBtn && !triggerBtn.contains(e.target)) {
-            isPanelOpen = false;
-            panel.style.display = 'none';
-        }
-    }, true);
-
-    // ===== 3. 界面注入与状态绑定 =====
+    // ===== UI 注入 =====
     function injectUI() {
         const target = document.querySelector('.open-party-toggle');
         if (!target) return;
@@ -158,7 +139,7 @@
                 isPanelOpen = !isPanelOpen;
                 const p = document.getElementById('augment-auto-pick-panel');
                 p.style.display = isPanelOpen ? 'flex' : 'none';
-                if (isPanelOpen) renderUI(); // 🚨 每次打开面板强制重绘，防止被冲刷
+                if (isPanelOpen) renderUI(); 
             };
 
             if (window.getComputedStyle(target).position === 'static') target.style.position = 'relative';
@@ -170,6 +151,7 @@
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
 
+            // 面板 HTML：所有状态直接从内存变量读取，确保初始化正确
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -207,7 +189,7 @@
             const mainToggle = document.getElementById('native-toggle');
             mainToggle.onclick = () => {
                 isEnabled = !isEnabled;
-                localStorage.setItem(KEY_ENABLED, isEnabled.toString());
+                localStorage.setItem(KEY_ENABLED, isEnabled.toString()); // 点击立即存
                 mainToggle.style.background = isEnabled ? '#2ECC71' : '#3C2E14';
                 mainToggle.querySelector('div').style.left = isEnabled ? '22px' : '2px';
                 log(`自动选人 ${isEnabled ? '开启' : '关闭'}`, isEnabled ? '#2ECC71' : '#E74C3C');
@@ -216,30 +198,31 @@
             const fbSelect = document.getElementById('fallback-select');
             fbSelect.onchange = (e) => {
                 fallbackStrategy = e.target.value;
-                localStorage.setItem(KEY_FALLBACK, fallbackStrategy);
+                localStorage.setItem(KEY_FALLBACK, fallbackStrategy); // 改变立即存
             };
 
             document.getElementById('aug-search').oninput = (e) => renderUI(e.target.value);
             document.getElementById('aug-btn-clear').onclick = () => {
                 if (confirm('确定要清空所有优先级吗？')) {
                     priorityList = [];
-                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList));
+                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 清空立即存
                     renderUI();
                 }
             };
 
-            renderUI(''); // 初次渲染
+            renderUI('');
         }
     }
 
-    // ===== 4. 渲染函数 =====
+    // ===== 渲染函数 =====
     function renderUI(keyword = '') {
         const allList = document.getElementById('aug-all-list');
         const priorityListEl = document.getElementById('aug-priority-list');
         if (!allList || !priorityListEl) return;
 
+        // 🚨 核心防覆盖锁：如果英雄没加载完，就显示“加载中”，绝对不覆盖你刚才看到的空数据
         if (allChampions.length === 0) {
-            priorityListEl.innerHTML = '<div style="color:#6B6B6B; font-size:12px;">正在加载英雄数据...</div>';
+            priorityListEl.innerHTML = '<div style="color:#6B6B6B; font-size:12px;">正在加载英雄数据，请稍后...</div>';
             return;
         }
 
@@ -276,7 +259,7 @@
                 const [moved] = priorityList.splice(dragSrcIndex, 1);
                 let insertAt = (dragSrcIndex < index) ? (before ? index - 1 : index) : (before ? index : index + 1);
                 priorityList.splice(insertAt, 0, moved);
-                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 🚨 拖拽后立即持久化
+                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 拖拽存
                 renderUI();
             };
 
@@ -287,7 +270,7 @@
                     if (a === 'up' && index > 0) [priorityList[index - 1], priorityList[index]] = [priorityList[index], priorityList[index - 1]];
                     else if (a === 'down' && index < priorityList.length - 1) [priorityList[index + 1], priorityList[index]] = [priorityList[index], priorityList[index + 1]];
                     else if (a === 'del') priorityList.splice(index, 1);
-                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 🚨 增删后立即持久化
+                    localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 操作存
                     renderUI();
                 };
             });
@@ -304,14 +287,14 @@
             item.innerHTML = `<img src="${champ.icon}" style="width: 24px; height: 24px; border-radius: 50%;"><span style="color: #A09B8C; font-size: 12px;">${champ.name}</span>`;
             item.onclick = () => {
                 priorityList.push(champ.id);
-                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 🚨 添加后立即持久化
+                localStorage.setItem(KEY_PRIORITY, JSON.stringify(priorityList)); // 添加存
                 renderUI();
             };
             allList.appendChild(item);
         });
     }
 
-    // ===== 5. 核心引擎 =====
+    // ===== 核心引擎 =====
     async function runEngine() {
         if (!isEnabled) return;
         try {
