@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         海克斯自动选人 (完美持久化版)
 // @description  适配LOL原生风格，使用 DataStore 真正持久化，开关和列表重启后永久保存
-// @version      413.1.0
+// @version      413.1.1
 // ==/PenguLoader==
 (function () {
     'use strict';
@@ -24,44 +24,6 @@
     const WUKONG_ID = 62;
     let swapTargetId = null;
     let lastSwapAttemptTime = 0;
-
-    // ===== 日志系统 =====
-    const LOG_MAX = 14;
-    let logLines = [];
-    let logEl = null;
-
-    function ensureLogEl() {
-        if (logEl && document.body.contains(logEl)) return;
-        logEl = document.createElement('div');
-        logEl.id = 'augment-auto-pick-log';
-        logEl.style.cssText = `
-            position: fixed; top: 10px; left: 10px;
-            width: 400px; max-height: 300px; overflow: hidden;
-            background: rgba(1,10,19,0.9); border: 1px solid #785A28;
-            box-shadow: 0 0 10px rgba(0,0,0,0.8); z-index: 999999;
-            font-family: 'Consolas', 'Microsoft YaHei', monospace;
-            font-size: 11px; line-height: 1.45; color: #A09B8C;
-            padding: 6px 8px; border-radius: 3px; pointer-events: none;
-        `;
-        document.body.appendChild(logEl);
-        renderLog();
-    }
-
-    function log(msg, color) {
-        const t = new Date();
-        const ts = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
-        logLines.push({ ts, msg, color: color || '#A09B8C' });
-        if (logLines.length > LOG_MAX) logLines.shift();
-        ensureLogEl();
-        renderLog();
-    }
-
-    function renderLog() {
-        if (!logEl) return;
-        logEl.innerHTML = logLines.map(l =>
-            `<div><span style="color:#5A4A2A;">[${l.ts}]</span> <span style="color:${l.color};">${l.msg}</span></div>`
-        ).join('');
-    }
 
     // ===== 2. 英雄数据加载 =====
     const DATA_API_ORIGIN = "https://data.dtodo.cn";
@@ -94,16 +56,13 @@
                     }
                 });
                 allChampions = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
-                log(`英雄数据加载完成 (${allChampions.length})`, '#2ECC71');
 
                 // 数据加载完后强制重绘一次界面
                 if (document.getElementById('augment-auto-pick-panel')) {
                     renderUI();
                 }
             }
-        } catch (e) {
-            log('英雄数据加载失败', '#E74C3C');
-        }
+        } catch (e) {}
     }
 
     function champName(id) {
@@ -201,7 +160,6 @@
                 DataStore.set(KEY_ENABLED, isEnabled);
                 mainToggle.style.background = isEnabled ? '#2ECC71' : '#3C2E14';
                 mainToggle.querySelector('div').style.left = isEnabled ? '22px' : '2px';
-                log(`自动选人 ${isEnabled ? '开启' : '关闭'}`, isEnabled ? '#2ECC71' : '#E74C3C');
             };
 
             const fbSelect = document.getElementById('fallback-select');
@@ -402,7 +360,6 @@
 
     // ===== 启动 =====
     const init = async () => {
-        log('脚本启动，加载英雄数据...', '#3498DB');
         loadAllChampions();
         setInterval(async () => {
             try {
