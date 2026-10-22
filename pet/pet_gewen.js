@@ -3,7 +3,7 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      4.0.0
+// @version      4.1.0
 // ==/UserScript==
 
 (function () {
@@ -246,9 +246,6 @@
         renderer.render(scene, camera);
     }
 
-    // ==========================================
-    // 🚨 防御式启动拦截机制
-    // ==========================================
     window.stopPetAnimation = function() {
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
         if (idleTimer) clearInterval(idleTimer);
