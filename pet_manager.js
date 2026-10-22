@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         宠物管理器 (强插防丢版)
+// @name         宠物管理器 (缝合怪完美兼容版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      9.0.0
+// @version      10.0.0
 // ==/UserScript==
 
 (function () {
@@ -18,42 +18,29 @@
 
     window.stopPetAnimation = null;
 
+    // ==========================================
+    // 模块 1：创建按钮
+    // ==========================================
     function createUI() {
         if (document.getElementById('pet-switch-btn')) return;
-
-        // 🚨 如果 body 还没出来，等 100 毫秒再试
-        if (!document.body) {
-            setTimeout(createUI, 100);
-            return;
-        }
+        if (!document.body) return;
 
         const btn = document.createElement('button');
         btn.id = 'pet-switch-btn';
         btn.style.cssText = `
-            position: fixed !important; 
-            bottom: 20px !important; 
-            left: 20px !important;
-            padding: 8px 16px !important; 
-            background: linear-gradient(90deg, #1e2328, #3d4450) !important;
-            color: #C8AA6E !important; 
-            border: 1px solid #C8AA6E !important; 
-            border-radius: 4px !important;
-            font-weight: bold !important; 
-            font-size: 14px !important; 
-            z-index: 2147483647 !important;
-            cursor: pointer !important; 
-            box-shadow: 0 0 10px rgba(0,0,0,0.5) !important;
-            text-transform: capitalize !important;
-            display: block !important;
+            position: fixed !important; bottom: 20px !important; left: 20px !important;
+            padding: 8px 16px !important; background: linear-gradient(90deg, #1e2328, #3d4450) !important;
+            color: #C8AA6E !important; border: 1px solid #C8AA6E !important; border-radius: 4px !important;
+            font-weight: bold !important; font-size: 14px !important; z-index: 2147483647 !important;
+            cursor: pointer !important; box-shadow: 0 0 10px rgba(0,0,0,0.5) !important;
+            text-transform: capitalize !important; display: block !important;
         `;
         btn.onclick = () => {
             const currentIndex = PET_LIST.indexOf(currentPetKey);
             const nextIndex = (currentIndex + 1) % PET_LIST.length;
             switchPet(PET_LIST[nextIndex]);
         };
-        
         document.body.appendChild(btn);
-        console.log("✅ 按钮已成功插入 DOM！");
         updateButtonText();
     }
 
@@ -65,6 +52,9 @@
         btn.innerText = `切换到: ${PET_LIST[nextIndex]}`;
     }
 
+    // ==========================================
+    // 模块 2：切换与清理逻辑
+    // ==========================================
     function cleanOldPet() {
         if (window.stopPetAnimation) {
             try { window.stopPetAnimation(); } catch(e){}
@@ -86,6 +76,9 @@
         updateButtonText();
     }
 
+    // ==========================================
+    // 模块 3：后台扫描
+    // ==========================================
     function scanPetsInBackground() {
         fetch(API_PROXY)
             .then(res => res.ok ? res.text() : Promise.reject())
@@ -112,7 +105,7 @@
 
                 if (scannedPets.length > 0) {
                     if (JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets)) {
-                        console.log("🔄 后台发现新宠物，更新列表:", scannedPets);
+                        console.log("🔄 后台发现最新宠物列表，已更新！");
                         PET_LIST = scannedPets;
                         if (!PET_LIST.includes(currentPetKey)) switchPet(PET_LIST[0]);
                         updateButtonText();
@@ -122,46 +115,45 @@
             .catch(e => console.log("ℹ️ 扫描失败，保持保底名单"));
     }
 
-    // 🚨 核心修复：使用 setInterval 强制检测，直到按钮插进去为止
-    let booted = false;
-    const bootInterval = setInterval(() => {
-        // 1. 如果还没启动，先检测客户端加载完成没
-        if (!booted) {
-            const isReady = document.querySelector('lol-uikit-flat-button') || 
-                            document.querySelector('.client-root') || 
-                            document.querySelector('.parties-game-navs');
-            
-            if (isReady) {
-                booted = true;
-                clearInterval(bootInterval);
-                
-                // 画按钮
-                createUI();
-                // 唤醒宠物
-                setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
-                }, 500);
-                // 后台更新
-                scanPetsInBackground();
-            }
+    // ==========================================
+    // 模块 4：统一启动引擎 (抄你的完美模板)
+    // ==========================================
+    const init = () => {
+        createUI();
+        
+        // 如果还没召唤宠物，立刻召唤默认宠物
+        if (!document.getElementById('three-pet-container')) {
+            window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
         }
-    }, 1000);
+        
+        scanPetsInBackground();
 
-    // 如果 15 秒后还没检测到，强行破门而入
-    setTimeout(() => {
-        if (!booted) {
-            booted = true;
+        // 监听 DOM 变化（防止切页面按钮丢失）
+        const observer = new MutationObserver(() => {
             createUI();
-            setTimeout(() => {
-                window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
-            }, 500);
-            scanPetsInBackground();
-        }
-    }, 15000);
+        });
 
+        if (document.body) {
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+    };
+
+    // 启动
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    // 兜底定时器（每 2 秒强刷一次，确保切大厅时按钮必然存在）
+    setInterval(() => {
+        createUI();
+    }, 2000);
+
+    // F9 强制刷新扫描
     window.addEventListener('keydown', (e) => {
         if (e.key === 'F9') {
-            console.log('🔄 强制刷新...');
+            console.log('🔄 强制刷新宠物列表...');
             scanPetsInBackground();
         }
     });
