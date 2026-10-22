@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 宠物自动识别版
+// @name         3D 格温宠物 (纯净待机版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      5.0.0
+// @version      6.0.0
 // ==/UserScript==
 
 (function () {
@@ -11,10 +11,12 @@
 
     const CDN_BASE = 'https://cdn.jsdmirror.com/gh/a1417091141/LOLjs@main';
     
-    // 这里只需要提供名字和模型地址，没有任何动作配置了！
+    // 🚨 纯手动配置，只保留最基础的动作
     const CONF = {
         name: 'gewen',
-        url: `${CDN_BASE}/pet/gewen.glb`
+        url: `${CDN_BASE}/pet/gewen.glb`,
+        idle: 'idle_base', // 你截图里确认的待机动作
+        run: 'run'         // 如果拖拽时像滑冰，可以尝试换成 'walk' 或者 'run_base'
     };
 
     let container = null;
@@ -23,16 +25,12 @@
     let actions = {};
     let currentAction = null;
     
-    // 自动识别出来的变量
-    let autoIdle = '';
-    let autoRun = '';
-    let autoClickPool = [];
-
-    let isDragging = false, isRotating = false;
-    let prevMouseX = 0, prevMouseY = 0, dragDistance = 0; 
+    let isDragging = false;
+    let isRotating = false;
+    let prevMouseX = 0, prevMouseY = 0;
+    
     let targetRotationX = 0, targetRotationY = 0;
     let currentRotationX = 0, currentRotationY = 0;
-    let idleTimer = null;
 
     function loadScript(src) {
         return new Promise((resolve, reject) => {
@@ -53,7 +51,6 @@
 
         container = document.createElement('div');
         container.id = 'three-pet-container';
-        // 高度和尺寸已经修正
         container.style.cssText = `
             position: fixed; bottom: 50px; right: 50px; 
             width: 350px; height: 400px;
@@ -63,8 +60,9 @@
 
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(45, 350 / 400, 0.1, 1000);
-        // 🚨 相机拉远
-        camera.position.set(0, 1.5, 8.5); 
+        
+        // 🚨 适配格温的远距离镜头，防止大头贴
+        camera.position.set(0, 1.0, 8.5); 
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(350, 400);
@@ -79,6 +77,7 @@
         fillLight.position.set(-5, 5, -5); scene.add(fillLight);
 
         clock = new THREE.Clock();
+        
         setupInteractions(THREE);
         loadPet();
         animate(THREE);
@@ -91,13 +90,6 @@
         loader.load(CONF.url, (gltf) => {
             if (petModel) {
                 scene.remove(petModel.parent);
-                petModel.traverse((child) => {
-                    if (child.isMesh) {
-                        child.geometry.dispose();
-                        if (child.material.map) child.material.map.dispose();
-                        child.material.dispose();
-                    }
-                });
             }
             if (mixer) mixer.stopAllAction();
             actions = {};
@@ -110,7 +102,7 @@
             const center = box.getCenter(new THREE.Vector3());
             petModel.position.sub(center); 
             
-            // 🚨 稍微缩小一点
+            // 缩小一点，让她完整显示
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 3.5 / maxDim; 
             petModel.scale.set(scale, scale, scale);
@@ -131,57 +123,23 @@
                 gltf.animations.forEach(clip => {
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
-
-                // 🚨 启动自动识别系统
-                analyzeAnimations(gltf);
                 
-                // 播放识别出来的待机动作
-                playAction(autoIdle);
-                
-                if (idleTimer) clearInterval(idleTimer);
-                idleTimer = setInterval(triggerEasterEgg, 45000);
+                // 🚨 启动时只播放待机动作
+                playAction(CONF.idle);
             }
         }, undefined, (error) => {
             console.error(`[Pet] ${CONF.name} 加载失败:`, error);
         });
     }
 
-    // ==========================================
-    // 🚨 全自动智能动作分类系统
-    // ==========================================
-    function analyzeAnimations(gltf) {
-        if (!gltf.animations || gltf.animations.length === 0) return;
-
-        const allNames = gltf.animations.map(clip => clip.name.toLowerCase());
-        console.log("🔍 扫描到模型自带的动作列表:", allNames);
-
-        // 1. 自动寻找基础待机
-        autoIdle = allNames.find(n => n.includes('idle_base')) || 
-                   allNames.find(n => n.includes('idle')) || 
-                   allNames[0];
-
-        // 2. 自动寻找跑动
-        autoRun = allNames.find(n => n.includes('run')) || 
-                  allNames.find(n => n.includes('walk')) || 
-                  autoIdle; 
-
-        // 3. 自动寻找互动
-        const clickKeywords = ['laugh', 'joke', 'taunt', 'dance', 'idle01', 'idle02', 'idle1', 'idle2'];
-        autoClickPool = allNames.filter(n => clickKeywords.some(k => n.includes(k)));
-
-        const extraIdles = allNames.filter(n => n.includes('idle') && n !== autoIdle);
-        autoClickPool = [...new Set([...autoClickPool, ...extraIdles])];
-
-        if (autoClickPool.length === 0) {
-            autoClickPool = allNames.filter(n => n !== autoIdle && n !== autoRun).slice(0, 3);
-        }
-
-        console.log("✅ 智能分类结果 - 待机:", autoIdle, "| 跑动:", autoRun, "| 互动池:", autoClickPool);
-    }
-
     function playAction(actionName, loop = true) {
-        if (!actions[actionName]) return;
-        const newAction = actions[actionName];
+        // 先找完全匹配的，再找模糊匹配的（防大小写问题）
+        const actualKey = Object.keys(actions).find(n => n === actionName) || 
+                          Object.keys(actions).find(n => n.includes(actionName));
+                          
+        if (!actualKey) return;
+        
+        const newAction = actions[actualKey];
         if (currentAction === newAction) return; 
 
         if (currentAction) currentAction.fadeOut(0.2);
@@ -192,30 +150,25 @@
         currentAction = newAction;
     }
 
-    function triggerEasterEgg() {
-        if (isDragging || !currentAction) return;
-        // 只要是待机状态，就随机触发
-        if (currentAction._clip.name.toLowerCase().includes('idle')) {
-            if (autoClickPool.length > 0) {
-                const randomEgg = autoClickPool[Math.floor(Math.random() * autoClickPool.length)];
-                playAction(randomEgg, false);
-                setTimeout(() => { if (!isDragging) playAction(autoIdle); }, 3500);
-            }
-        }
-    }
-
     function setupInteractions(THREE) {
         container.addEventListener('mousedown', (e) => {
             e.preventDefault();
             if (e.button === 0) {
-                isDragging = true; dragDistance = 0; container.style.cursor = 'grabbing';
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
+                isDragging = true; 
+                container.style.cursor = 'grabbing';
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
                 const rect = container.getBoundingClientRect();
-                container.style.bottom = 'auto'; container.style.right = 'auto';
-                container.style.left = rect.left + 'px'; container.style.top = rect.top + 'px';
+                container.style.bottom = 'auto'; 
+                container.style.right = 'auto';
+                container.style.left = rect.left + 'px'; 
+                container.style.top = rect.top + 'px';
             } else if (e.button === 2) {
-                isRotating = true; container.style.cursor = 'move';
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
+                isRotating = true; 
+                container.style.cursor = 'move';
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
             }
         });
 
@@ -223,38 +176,40 @@
 
         window.addEventListener('mousemove', (e) => {
             if (isDragging) {
-                const dx = e.clientX - prevMouseX; const dy = e.clientY - prevMouseY;
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
-                dragDistance += Math.abs(dx) + Math.abs(dy);
+                const dx = e.clientX - prevMouseX; 
+                const dy = e.clientY - prevMouseY;
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
                 const rect = container.getBoundingClientRect();
-                container.style.left = (rect.left + dx) + 'px'; container.style.top = (rect.top + dy) + 'px';
+                container.style.left = (rect.left + dx) + 'px'; 
+                container.style.top = (rect.top + dy) + 'px';
 
                 if (dx > 2) targetRotationY = Math.PI / 2; 
                 else if (dx < -2) targetRotationY = -Math.PI / 2; 
-                // 自动识别出来的跑动
-                playAction(autoRun);
+                
+                // 🚨 拖拽时只播放跑动
+                playAction(CONF.run);
                 
             } else if (isRotating) {
-                const dx = e.clientX - prevMouseX; const dy = e.clientY - prevMouseY;
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
-                targetRotationY += dx * 0.02; targetRotationX += dy * 0.02;
+                const dx = e.clientX - prevMouseX; 
+                const dy = e.clientY - prevMouseY;
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
+                targetRotationY += dx * 0.02; 
+                targetRotationX += dy * 0.02;
                 targetRotationX = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, targetRotationX));
             }
         });
 
         window.addEventListener('mouseup', () => {
             if (isDragging) {
-                isDragging = false; container.style.cursor = 'grab';
-                playAction(autoIdle);
-                if (dragDistance < 10) {
-                    // 点击时从互动池随机抽一个
-                    if (autoClickPool.length > 0) {
-                        const randomClick = autoClickPool[Math.floor(Math.random() * autoClickPool.length)];
-                        playAction(randomClick, false);
-                        setTimeout(() => { if (!isDragging) playAction(autoIdle); }, 3500);
-                    }
-                    targetRotationY = 0; 
-                }
+                isDragging = false; 
+                container.style.cursor = 'grab';
+                
+                // 🚨 松手后恢复待机
+                playAction(CONF.idle);
             }
             isRotating = false;
         });
@@ -288,7 +243,6 @@
 
     window.stopPetAnimation = function() {
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
-        if (idleTimer) clearInterval(idleTimer);
     };
 
     if (window.current_pet === CONF.name) {
