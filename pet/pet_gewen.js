@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 格温宠物
+// @name         3D 宠物自动识别版
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      4.1.0
+// @version      5.0.0
 // ==/UserScript==
 
 (function () {
@@ -11,13 +11,10 @@
 
     const CDN_BASE = 'https://cdn.jsdmirror.com/gh/a1417091141/LOLjs@main';
     
+    // 这里只需要提供名字和模型地址，没有任何动作配置了！
     const CONF = {
         name: 'gewen',
-        url: `${CDN_BASE}/pet/gewen.glb`,
-        idle: 'idle',
-        run: 'run',
-        egg: ['joke', 'taunt'],
-        click: ['laugh', 'taunt', 'joke', 'dance']
+        url: `${CDN_BASE}/pet/gewen.glb`
     };
 
     let container = null;
@@ -26,11 +23,13 @@
     let actions = {};
     let currentAction = null;
     
-    let isDragging = false;
-    let isRotating = false;
-    let prevMouseX = 0, prevMouseY = 0;
-    let dragDistance = 0; 
+    // 自动识别出来的变量
+    let autoIdle = '';
+    let autoRun = '';
+    let autoClickPool = [];
 
+    let isDragging = false, isRotating = false;
+    let prevMouseX = 0, prevMouseY = 0, dragDistance = 0; 
     let targetRotationX = 0, targetRotationY = 0;
     let currentRotationX = 0, currentRotationY = 0;
     let idleTimer = null;
@@ -54,6 +53,7 @@
 
         container = document.createElement('div');
         container.id = 'three-pet-container';
+        // 高度和尺寸已经修正
         container.style.cssText = `
             position: fixed; bottom: 50px; right: 50px; 
             width: 350px; height: 400px;
@@ -63,7 +63,8 @@
 
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(45, 350 / 400, 0.1, 1000);
-        camera.position.set(0, 1.5, 4.5); 
+        // 🚨 相机拉远
+        camera.position.set(0, 1.5, 8.5); 
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(350, 400);
@@ -78,7 +79,6 @@
         fillLight.position.set(-5, 5, -5); scene.add(fillLight);
 
         clock = new THREE.Clock();
-        
         setupInteractions(THREE);
         loadPet();
         animate(THREE);
@@ -109,9 +109,12 @@
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
             petModel.position.sub(center); 
+            
+            // 🚨 稍微缩小一点
             const maxDim = Math.max(size.x, size.y, size.z);
-            const scale = 4.5 / maxDim; 
+            const scale = 3.5 / maxDim; 
             petModel.scale.set(scale, scale, scale);
+            
             const scaledBox = new THREE.Box3().setFromObject(petModel);
             petModel.position.y -= scaledBox.min.y; 
 
@@ -128,7 +131,12 @@
                 gltf.animations.forEach(clip => {
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
-                playAction(CONF.idle);
+
+                // 🚨 启动自动识别系统
+                analyzeAnimations(gltf);
+                
+                // 播放识别出来的待机动作
+                playAction(autoIdle);
                 
                 if (idleTimer) clearInterval(idleTimer);
                 idleTimer = setInterval(triggerEasterEgg, 45000);
@@ -138,10 +146,42 @@
         });
     }
 
-    function playAction(keyword, loop = true) {
-        const actualKey = Object.keys(actions).find(n => n.includes(keyword));
-        if (!actualKey) return;
-        const newAction = actions[actualKey];
+    // ==========================================
+    // 🚨 全自动智能动作分类系统
+    // ==========================================
+    function analyzeAnimations(gltf) {
+        if (!gltf.animations || gltf.animations.length === 0) return;
+
+        const allNames = gltf.animations.map(clip => clip.name.toLowerCase());
+        console.log("🔍 扫描到模型自带的动作列表:", allNames);
+
+        // 1. 自动寻找基础待机
+        autoIdle = allNames.find(n => n.includes('idle_base')) || 
+                   allNames.find(n => n.includes('idle')) || 
+                   allNames[0];
+
+        // 2. 自动寻找跑动
+        autoRun = allNames.find(n => n.includes('run')) || 
+                  allNames.find(n => n.includes('walk')) || 
+                  autoIdle; 
+
+        // 3. 自动寻找互动
+        const clickKeywords = ['laugh', 'joke', 'taunt', 'dance', 'idle01', 'idle02', 'idle1', 'idle2'];
+        autoClickPool = allNames.filter(n => clickKeywords.some(k => n.includes(k)));
+
+        const extraIdles = allNames.filter(n => n.includes('idle') && n !== autoIdle);
+        autoClickPool = [...new Set([...autoClickPool, ...extraIdles])];
+
+        if (autoClickPool.length === 0) {
+            autoClickPool = allNames.filter(n => n !== autoIdle && n !== autoRun).slice(0, 3);
+        }
+
+        console.log("✅ 智能分类结果 - 待机:", autoIdle, "| 跑动:", autoRun, "| 互动池:", autoClickPool);
+    }
+
+    function playAction(actionName, loop = true) {
+        if (!actions[actionName]) return;
+        const newAction = actions[actionName];
         if (currentAction === newAction) return; 
 
         if (currentAction) currentAction.fadeOut(0.2);
@@ -154,12 +194,12 @@
 
     function triggerEasterEgg() {
         if (isDragging || !currentAction) return;
-        if (currentAction._clip.name.toLowerCase().includes(CONF.idle)) {
-            const availableEggs = CONF.egg.filter(name => actions[name]);
-            if (availableEggs.length > 0) {
-                const randomEgg = availableEggs[Math.floor(Math.random() * availableEggs.length)];
+        // 只要是待机状态，就随机触发
+        if (currentAction._clip.name.toLowerCase().includes('idle')) {
+            if (autoClickPool.length > 0) {
+                const randomEgg = autoClickPool[Math.floor(Math.random() * autoClickPool.length)];
                 playAction(randomEgg, false);
-                setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                setTimeout(() => { if (!isDragging) playAction(autoIdle); }, 3500);
             }
         }
     }
@@ -191,7 +231,8 @@
 
                 if (dx > 2) targetRotationY = Math.PI / 2; 
                 else if (dx < -2) targetRotationY = -Math.PI / 2; 
-                playAction(CONF.run);
+                // 自动识别出来的跑动
+                playAction(autoRun);
                 
             } else if (isRotating) {
                 const dx = e.clientX - prevMouseX; const dy = e.clientY - prevMouseY;
@@ -204,14 +245,13 @@
         window.addEventListener('mouseup', () => {
             if (isDragging) {
                 isDragging = false; container.style.cursor = 'grab';
-                playAction(CONF.idle);
+                playAction(autoIdle);
                 if (dragDistance < 10) {
-                    const clicks = Object.keys(actions).filter(n => 
-                        CONF.click.some(k => n.includes(k))
-                    );
-                    if (clicks.length > 0) {
-                        playAction(clicks[Math.floor(Math.random() * clicks.length)], false);
-                        setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                    // 点击时从互动池随机抽一个
+                    if (autoClickPool.length > 0) {
+                        const randomClick = autoClickPool[Math.floor(Math.random() * autoClickPool.length)];
+                        playAction(randomClick, false);
+                        setTimeout(() => { if (!isDragging) playAction(autoIdle); }, 3500);
                     }
                     targetRotationY = 0; 
                 }
@@ -223,7 +263,7 @@
             e.preventDefault();
             if (e.deltaY < 0) camera.position.z -= 0.2; 
             else camera.position.z += 0.2;
-            camera.position.z = Math.max(2, Math.min(8, camera.position.z));
+            camera.position.z = Math.max(4, Math.min(12, camera.position.z));
         }, { passive: false });
     }
 
