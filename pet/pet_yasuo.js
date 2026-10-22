@@ -3,16 +3,14 @@
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      4.0.0
+// @version      4.1.0
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    // 你的 CDN 基础路径
     const CDN_BASE = 'https://cdn.jsdmirror.com/gh/a1417091141/LOLjs@main';
     
-    // 动作配置
     const CONF = {
         name: 'yasuo',
         url: `${CDN_BASE}/pet/yasuo.glb`,
@@ -248,24 +246,17 @@
         renderer.render(scene, camera);
     }
 
-    // ==========================================
-    // 🚨 防御式启动拦截机制
-    // ==========================================
-    // 暴露清理接口
     window.stopPetAnimation = function() {
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
         if (idleTimer) clearInterval(idleTimer);
     };
 
-    // 1. 如果主控要求现在显示亚索
     if (window.current_pet === CONF.name) {
         initEngine();
     }
     
-    // 2. 监听主控的切换广播
     window.addEventListener('spawn_pet', function(e) {
         if (e.detail === CONF.name) {
-            // 检查是否已经有画布，防止重复加载
             if (!document.getElementById('three-pet-container')) {
                 initEngine();
             }
