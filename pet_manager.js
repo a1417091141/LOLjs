@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         宠物管理器 (纯同步极速版)
+// @name         宠物管理器 (云端无阻塞秒出版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      7.0.0
+// @version      9.0.0
 // ==/UserScript==
 
 (function () {
@@ -11,16 +11,15 @@
 
     const REPO = 'a1417091141/LOLjs';
     const CDN_BASE = `https://cdn.jsdmirror.com/gh/${REPO}@main`;
-    const API_PROXY = 'http://127.0.0.1:18888/github-api';
-
-    // 🚨 绝对保底名单，不依赖任何网络，直接写死
-    let PET_LIST = ['yasuo', 'gewen'];
+    
+    // 🚨 保底名单：如果网络慢，先用这俩，绝对不卡界面
+    let PET_LIST = ['yasuo', 'gewen']; 
     let currentPetKey = localStorage.getItem('pet_current_model') || 'yasuo';
 
     window.stopPetAnimation = null;
 
     // ==========================================
-    // 1. 立即生成 UI（不包含任何 await，绝对秒出）
+    // 1. 极速生成 UI（没有任何网络请求，0毫秒加载）
     // ==========================================
     function createUI() {
         if (document.getElementById('pet-switch-btn')) return;
@@ -43,14 +42,6 @@
         };
         document.body.appendChild(btn);
         updateButtonText();
-
-        // F9 手动刷新扫描
-        window.addEventListener('keydown', (e) => {
-            if (e.key === 'F9') {
-                if (btn) btn.innerText = '扫描中...';
-                scanPetsInBackground(); 
-            }
-        });
     }
 
     function updateButtonText() {
@@ -90,87 +81,69 @@
     }
 
     // ==========================================
-    // 3. 后台静默扫描最新列表（仅后台运行，不影响 UI）
+    // 3. 后台云端扫描（独立运行，不占用主线程，不卡加载）
     // ==========================================
-    async function scanPetsInBackground() {
-        try {
-            let jsonUrl = `${CDN_BASE}/plugins.json?t=${Date.now()}`;
-            
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 2000);
-                const commitRes = await fetch(API_PROXY, { signal: controller.signal });
-                clearTimeout(timeoutId);
-                
-                if (commitRes.ok) {
-                    const commitHash = await commitRes.text();
-                    if (commitHash && commitHash.length > 5) {
-                        jsonUrl = `https://cdn.jsdmirror.com/gh/${REPO}@${commitHash.trim()}/plugins.json`;
-                    }
-                }
-            } catch(e) {}
+    function scanPetsInBackground() {
+        fetch(`${CDN_BASE}/plugins.json?t=${Date.now()}`)
+            .then(res => res.json())
+            .then(config => {
+                if (config && config.plugins && Array.isArray(config.plugins)) {
+                    const petFiles = config.plugins.filter(file => 
+                        file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
+                    );
 
-            const res = await fetch(jsonUrl);
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            
-            const config = await res.json();
-            
-            if (config && config.plugins && Array.isArray(config.plugins)) {
-                const petFiles = config.plugins.filter(file => 
-                    file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
-                );
+                    const scannedPets = petFiles.map(file => {
+                        const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
+                        return match ? match[1] : null;
+                    }).filter(Boolean);
 
-                const scannedPets = petFiles.map(file => {
-                    const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
-                    return match ? match[1] : null;
-                }).filter(Boolean);
-
-                if (scannedPets.length > 0) {
-                    const isDifferent = JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets);
-                    if (isDifferent) {
-                        console.log("🔄 发现新宠物列表，已自动更新。");
-                        PET_LIST = scannedPets;
-                        
-                        if (!PET_LIST.includes(currentPetKey)) {
-                            switchPet(PET_LIST[0]);
+                    if (scannedPets.length > 0) {
+                        // 判断和保底名单是否不一样，不一样才更新按钮
+                        if (JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets)) {
+                            console.log("🔄 云端扫描到最新宠物列表:", scannedPets);
+                            PET_LIST = scannedPets;
+                            
+                            if (!PET_LIST.includes(currentPetKey)) {
+                                switchPet(PET_LIST[0]);
+                            }
+                            updateButtonText();
                         }
-                        updateButtonText();
                     }
                 }
-            }
-        } catch(e) {
-            console.log("ℹ️ 后台列表同步失败（忽略即可，保底依然可用）", e);
-        }
+            })
+            .catch(e => {
+                console.log("ℹ️ 云端列表拉取失败，继续使用保底名单", e);
+            });
     }
 
     // ==========================================
-    // 4. 主启动流程
+    // 4. 启动
     // ==========================================
     function boot() {
-        // 直接画出按钮
+        // 瞬间出按钮
         createUI();
         
-        // 叫醒宠物
+        // 瞬间唤醒默认宠物
         setTimeout(() => {
             window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
         }, 500);
 
-        // 后台去拉取最新的列表（如果有新宠物，会偷偷更新按钮文字）
+        // 丢入后台默默扫描最新 JSON（不影响任何其他插件）
         scanPetsInBackground();
     }
 
-    // 轮询检测客户端是否加载完毕
+    // 监听客户端就绪
     let checkTimer = setInterval(() => {
         const isReady = document.querySelector('lol-uikit-flat-button') || 
                         document.querySelector('.client-root') || 
                         document.querySelector('.parties-game-navs');
         if (isReady) {
             clearInterval(checkTimer);
-            boot(); // 客户端好了，立刻启动！
+            boot(); 
         }
     }, 500);
 
-    // 极端情况下 10 秒后强制启动
+    // 极端兜底：10 秒后还没加载好也强行启动
     setTimeout(() => {
         if (!document.getElementById('pet-switch-btn')) {
             clearInterval(checkTimer);
