@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         宠物管理器 (持久化记忆版)
+// @name         宠物管理器 (不死鸟稳定版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      4.1.0
+// @version      5.0.0
 // ==/UserScript==
 
 (async function () {
@@ -13,59 +13,83 @@
     const CDN_BASE = `https://cdn.jsdmirror.com/gh/${REPO}@main`;
     const API_PROXY = 'http://127.0.0.1:18888/github-api';
 
-    // 🚨 核心：读取本地记忆，如果没有记录则默认 'yasuo'
+    // 🚨 保底名单：就算网络全断、JSON 读不到，也绝对能加载这两个
+    const FALLBACK_PETS = ['yasuo', 'gewen'];
+
     let currentPetKey = localStorage.getItem('pet_current_model') || 'yasuo';
-    let PET_LIST = [];
+    let PET_LIST = [...FALLBACK_PETS]; // 默认先塞入保底名单
+    let retryCount = 0;
 
     window.stopPetAnimation = null;
 
-    // 扫描 plugins.json 获取所有宠物
+    // ==========================================
+    // 1. 自动扫描（带重试和防崩溃）
+    // ==========================================
     async function scanPets() {
         try {
             let jsonUrl = `${CDN_BASE}/plugins.json?t=${Date.now()}`;
             
+            // 尝试使用本地代理打破缓存，最多等 1.5 秒，超时就跳过
             try {
-                const commitRes = await fetch(API_PROXY);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1500);
+                const commitRes = await fetch(API_PROXY, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                
                 if (commitRes.ok) {
                     const commitHash = await commitRes.text();
                     if (commitHash && commitHash.length > 5) {
                         jsonUrl = `https://cdn.jsdmirror.com/gh/${REPO}@${commitHash.trim()}/plugins.json`;
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                // 代理超时失败无所谓，继续用主分支的 URL 请求
+            }
 
             const res = await fetch(jsonUrl);
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            
             const config = await res.json();
             
-            const petFiles = config.plugins.filter(file => 
-                file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
-            );
+            if (config && config.plugins && Array.isArray(config.plugins)) {
+                const petFiles = config.plugins.filter(file => 
+                    file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
+                );
 
-            PET_LIST = petFiles.map(file => {
-                const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
-                return match ? match[1] : null;
-            }).filter(Boolean);
+                const scannedPets = petFiles.map(file => {
+                    const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
+                    return match ? match[1] : null;
+                }).filter(Boolean);
 
-            if (PET_LIST.length === 0) return;
-
-            // 🚨 如果本地记录的宠物被删除了，自动回退到第一个宠物
-            if (!PET_LIST.includes(currentPetKey)) {
-                currentPetKey = PET_LIST[0];
-                localStorage.setItem('pet_current_model', currentPetKey); // 更新本地记忆
+                // 如果扫描到了新宠物，合并更新列表
+                if (scannedPets.length > 0) {
+                    PET_LIST = scannedPets;
+                }
             }
-
-            if (!document.getElementById('pet-switch-btn')) {
-                createUI();
-                // 首次启动，唤醒当前宠物
-                setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
-                }, 1000);
-            } else {
-                updateButtonText();
-            }
-
         } catch(e) {
-            console.error("扫描宠物失败:", e);
+            console.warn("⚠️ 在线扫描失败，已启用本地保底宠物名单:", e.message);
+        } finally {
+            // 无论扫描成功还是失败，都必定执行 UI 初始化
+            initManager();
+        }
+    }
+
+    // ==========================================
+    // 2. 初始化管理器与 UI
+    // ==========================================
+    function initManager() {
+        if (!PET_LIST.includes(currentPetKey)) {
+            currentPetKey = PET_LIST[0];
+        }
+
+        if (!document.getElementById('pet-switch-btn')) {
+            createUI();
+            // 首次启动，叫醒默认宠物
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
+            }, 1000);
+        } else {
+            updateButtonText();
         }
     }
 
@@ -78,16 +102,13 @@
         if (old) old.remove();
     }
 
-    // 切换宠物并写入记忆
     function switchPet(nextKey) {
         const btn = document.getElementById('pet-switch-btn');
         if (btn) btn.innerText = '切换中...';
 
         cleanOldPet();
         currentPetKey = nextKey;
-        
-        // 🚨 核心：把切换后的宠物写入本地存储，下次启动生效
-        localStorage.setItem('pet_current_model', nextKey); 
+        localStorage.setItem('pet_current_model', nextKey);
 
         window.dispatchEvent(new CustomEvent('spawn_pet', { detail: nextKey }));
         updateButtonText();
@@ -95,6 +116,13 @@
 
     function createUI() {
         if (document.getElementById('pet-switch-btn')) return;
+        
+        // 确保 body 存在
+        if (!document.body) {
+            setTimeout(createUI, 500);
+            return;
+        }
+
         const btn = document.createElement('button');
         btn.id = 'pet-switch-btn';
         btn.style.cssText = `
@@ -113,10 +141,10 @@
         document.body.appendChild(btn);
         updateButtonText();
 
-        // 按 F9 强制刷新扫描
+        // 按 F9 热重载
         window.addEventListener('keydown', (e) => {
             if (e.key === 'F9') {
-                btn.innerText = '扫描中...';
+                if (btn) btn.innerText = '扫描中...';
                 scanPets(); 
             }
         });
@@ -125,17 +153,38 @@
     function updateButtonText() {
         const btn = document.getElementById('pet-switch-btn');
         if (!btn) return;
+        if (PET_LIST.length <= 1) {
+            btn.innerText = '仅发现 1 个宠物';
+            return;
+        }
         const currentIndex = PET_LIST.indexOf(currentPetKey);
         const nextIndex = (currentIndex + 1) % PET_LIST.length;
         btn.innerText = `切换到: ${PET_LIST[nextIndex]}`;
     }
 
-    setTimeout(() => {
-        if (document.querySelector('lol-uikit-flat-button') || document.querySelector('.client-root')) {
-            scanPets();
+    // ==========================================
+    // 3. 游戏启动引导
+    // ==========================================
+    function waitForClientReady() {
+        const isReady = document.querySelector('lol-uikit-flat-button') || 
+                        document.querySelector('.client-root') || 
+                        document.querySelector('.parties-game-navs');
+        
+        if (isReady) {
+            scanPets(); // 客户端就绪，开始扫描并初始化
         } else {
-            setTimeout(arguments.callee, 2000);
+            // 如果没就绪，每 2 秒检查一次
+            retryCount++;
+            if (retryCount > 30) { // 超过 60 秒还是找不到客户端界面，强行初始化
+                console.warn("⚠️ 等待客户端 UI 超时，强行启动管理器");
+                scanPets();
+            } else {
+                setTimeout(waitForClientReady, 2000);
+            }
         }
-    }, 5000);
+    }
+
+    // 启动
+    waitForClientReady();
 
 })();
