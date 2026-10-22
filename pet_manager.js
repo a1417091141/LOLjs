@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name         宠物管理器 (秒出且防卡兼容版)
+// @name         宠物管理器 (强插防丢版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      8.0.0
+// @version      9.0.0
 // ==/UserScript==
 
-(async function () {
+(function () {
     'use strict';
 
     const REPO = 'a1417091141/LOLjs';
@@ -14,33 +14,46 @@
     const API_PROXY = 'http://127.0.0.1:18888/github-api';
 
     let currentPetKey = localStorage.getItem('pet_current_model') || 'yasuo';
-    
-    // 🚨 保底名单：先不管网络，直接用这俩
     let PET_LIST = ['yasuo', 'gewen'];
 
     window.stopPetAnimation = null;
 
-    // 1. 纯同步画按钮（绝对不会卡）
     function createUI() {
         if (document.getElementById('pet-switch-btn')) return;
-        if (!document.body) return setTimeout(createUI, 100);
+
+        // 🚨 如果 body 还没出来，等 100 毫秒再试
+        if (!document.body) {
+            setTimeout(createUI, 100);
+            return;
+        }
 
         const btn = document.createElement('button');
         btn.id = 'pet-switch-btn';
         btn.style.cssText = `
-            position: fixed; bottom: 20px; left: 20px;
-            padding: 8px 16px; background: linear-gradient(90deg, #1e2328, #3d4450);
-            color: #C8AA6E; border: 1px solid #C8AA6E; border-radius: 4px;
-            font-weight: bold; font-size: 14px; z-index: 2147483647;
-            cursor: pointer; box-shadow: 0 0 10px rgba(0,0,0,0.5);
-            text-transform: capitalize;
+            position: fixed !important; 
+            bottom: 20px !important; 
+            left: 20px !important;
+            padding: 8px 16px !important; 
+            background: linear-gradient(90deg, #1e2328, #3d4450) !important;
+            color: #C8AA6E !important; 
+            border: 1px solid #C8AA6E !important; 
+            border-radius: 4px !important;
+            font-weight: bold !important; 
+            font-size: 14px !important; 
+            z-index: 2147483647 !important;
+            cursor: pointer !important; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.5) !important;
+            text-transform: capitalize !important;
+            display: block !important;
         `;
         btn.onclick = () => {
             const currentIndex = PET_LIST.indexOf(currentPetKey);
             const nextIndex = (currentIndex + 1) % PET_LIST.length;
             switchPet(PET_LIST[nextIndex]);
         };
+        
         document.body.appendChild(btn);
+        console.log("✅ 按钮已成功插入 DOM！");
         updateButtonText();
     }
 
@@ -73,9 +86,7 @@
         updateButtonText();
     }
 
-    // 2. 独立的后台网络请求（使用 .then 彻底解耦，不卡主线程）
     function scanPetsInBackground() {
-        // 先拿哈希
         fetch(API_PROXY)
             .then(res => res.ok ? res.text() : Promise.reject())
             .then(hash => {
@@ -86,7 +97,6 @@
                 return fetch(jsonUrl);
             })
             .catch(() => {
-                // 代理失败就拉主分支
                 return fetch(`${CDN_BASE}/plugins.json?t=${Date.now()}`);
             })
             .then(res => res.json())
@@ -102,7 +112,7 @@
 
                 if (scannedPets.length > 0) {
                     if (JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets)) {
-                        console.log("🔄 后台扫描到了最新宠物列表，已更新！");
+                        console.log("🔄 后台发现新宠物，更新列表:", scannedPets);
                         PET_LIST = scannedPets;
                         if (!PET_LIST.includes(currentPetKey)) switchPet(PET_LIST[0]);
                         updateButtonText();
@@ -112,24 +122,43 @@
             .catch(e => console.log("ℹ️ 扫描失败，保持保底名单"));
     }
 
-    // 3. 启动流程
+    // 🚨 核心修复：使用 setInterval 强制检测，直到按钮插进去为止
+    let booted = false;
+    const bootInterval = setInterval(() => {
+        // 1. 如果还没启动，先检测客户端加载完成没
+        if (!booted) {
+            const isReady = document.querySelector('lol-uikit-flat-button') || 
+                            document.querySelector('.client-root') || 
+                            document.querySelector('.parties-game-navs');
+            
+            if (isReady) {
+                booted = true;
+                clearInterval(bootInterval);
+                
+                // 画按钮
+                createUI();
+                // 唤醒宠物
+                setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
+                }, 500);
+                // 后台更新
+                scanPetsInBackground();
+            }
+        }
+    }, 1000);
+
+    // 如果 15 秒后还没检测到，强行破门而入
     setTimeout(() => {
-        const isReady = document.querySelector('lol-uikit-flat-button') || document.querySelector('.client-root');
-        if (isReady) {
-            // 1. 秒出按钮
+        if (!booted) {
+            booted = true;
             createUI();
-            // 2. 唤醒默认宠物
             setTimeout(() => {
                 window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
             }, 500);
-            // 3. 后台悄悄刷新列表
             scanPetsInBackground();
-        } else {
-            setTimeout(arguments.callee, 2000);
         }
-    }, 5000);
+    }, 15000);
 
-    // F9 强制刷新
     window.addEventListener('keydown', (e) => {
         if (e.key === 'F9') {
             console.log('🔄 强制刷新...');
