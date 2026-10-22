@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name         宠物管理器 (沙盒防卡死终极版)
+// @name         宠物管理器 (秒出且防卡兼容版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
 // @version      8.0.0
 // ==/UserScript==
 
-(function () {
+(async function () {
     'use strict';
 
     const REPO = 'a1417091141/LOLjs';
@@ -14,14 +14,13 @@
     const API_PROXY = 'http://127.0.0.1:18888/github-api';
 
     let currentPetKey = localStorage.getItem('pet_current_model') || 'yasuo';
-    // 🚨 极速保底，保证按钮绝对秒出
-    let PET_LIST = ['yasuo', 'gewen']; 
+    
+    // 🚨 保底名单：先不管网络，直接用这俩
+    let PET_LIST = ['yasuo', 'gewen'];
 
     window.stopPetAnimation = null;
 
-    // ==========================================
-    // 1. 极简 UI 生成 (纯同步，0毫秒，绝不卡插件)
-    // ==========================================
+    // 1. 纯同步画按钮（绝对不会卡）
     function createUI() {
         if (document.getElementById('pet-switch-btn')) return;
         if (!document.body) return setTimeout(createUI, 100);
@@ -53,9 +52,6 @@
         btn.innerText = `切换到: ${PET_LIST[nextIndex]}`;
     }
 
-    // ==========================================
-    // 2. 切换逻辑
-    // ==========================================
     function cleanOldPet() {
         if (window.stopPetAnimation) {
             try { window.stopPetAnimation(); } catch(e){}
@@ -77,76 +73,67 @@
         updateButtonText();
     }
 
-    // ==========================================
-    // 3. 用 iframe 沙盒偷偷联网（绝对不卡主进程）
-    // ==========================================
-    function scanPetsInSandbox() {
-        // 创建一个隐藏的 iframe 去干脏活累活
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-
-        // 把请求代码塞进去执行
-        iframe.contentWindow.fetch(`${CDN_BASE}/plugins.json?t=${Date.now()}`)
+    // 2. 独立的后台网络请求（使用 .then 彻底解耦，不卡主线程）
+    function scanPetsInBackground() {
+        // 先拿哈希
+        fetch(API_PROXY)
+            .then(res => res.ok ? res.text() : Promise.reject())
+            .then(hash => {
+                let jsonUrl = `${CDN_BASE}/plugins.json?t=${Date.now()}`;
+                if (hash && hash.length > 5) {
+                    jsonUrl = `https://cdn.jsdmirror.com/gh/${REPO}@${hash.trim()}/plugins.json`;
+                }
+                return fetch(jsonUrl);
+            })
+            .catch(() => {
+                // 代理失败就拉主分支
+                return fetch(`${CDN_BASE}/plugins.json?t=${Date.now()}`);
+            })
             .then(res => res.json())
             .then(config => {
-                if (config && config.plugins && Array.isArray(config.plugins)) {
-                    const petFiles = config.plugins.filter(file => 
-                        file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
-                    );
+                const petFiles = config.plugins.filter(file => 
+                    file.includes('pet_') && file.endsWith('.js') && !file.includes('pet_manager')
+                );
 
-                    const scannedPets = petFiles.map(file => {
-                        const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
-                        return match ? match[1] : null;
-                    }).filter(Boolean);
+                const scannedPets = petFiles.map(file => {
+                    const match = file.match(/pet_([a-zA-Z0-9]+)\.js/);
+                    return match ? match[1] : null;
+                }).filter(Boolean);
 
-                    if (scannedPets.length > 0) {
-                        if (JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets)) {
-                            console.log("🔄 沙盒扫描到最新宠物列表:", scannedPets);
-                            PET_LIST = scannedPets;
-                            if (!PET_LIST.includes(currentPetKey)) switchPet(PET_LIST[0]);
-                            updateButtonText();
-                        }
+                if (scannedPets.length > 0) {
+                    if (JSON.stringify(PET_LIST) !== JSON.stringify(scannedPets)) {
+                        console.log("🔄 后台扫描到了最新宠物列表，已更新！");
+                        PET_LIST = scannedPets;
+                        if (!PET_LIST.includes(currentPetKey)) switchPet(PET_LIST[0]);
+                        updateButtonText();
                     }
                 }
-                iframe.remove(); // 用完就删
             })
-            .catch(e => {
-                console.log("ℹ️ 沙盒联网失败，保持保底名单");
-                iframe.remove();
-            });
+            .catch(e => console.log("ℹ️ 扫描失败，保持保底名单"));
     }
 
-    // ==========================================
-    // 4. 启动
-    // ==========================================
-    function boot() {
-        createUI();
-        setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
-        }, 500);
-
-        // 延迟 3 秒，等 yindex 插件全部加载完毕，再通过 iframe 去联网
-        setTimeout(() => {
-            scanPetsInSandbox();
-        }, 3000);
-    }
-
-    // 监听大厅就绪
-    let checkTimer = setInterval(() => {
-        const isReady = document.querySelector('lol-uikit-flat-button') || 
-                        document.querySelector('.client-root') || 
-                        document.querySelector('.parties-game-navs');
+    // 3. 启动流程
+    setTimeout(() => {
+        const isReady = document.querySelector('lol-uikit-flat-button') || document.querySelector('.client-root');
         if (isReady) {
-            clearInterval(checkTimer);
-            boot(); 
+            // 1. 秒出按钮
+            createUI();
+            // 2. 唤醒默认宠物
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('spawn_pet', { detail: currentPetKey }));
+            }, 500);
+            // 3. 后台悄悄刷新列表
+            scanPetsInBackground();
+        } else {
+            setTimeout(arguments.callee, 2000);
         }
-    }, 500);
+    }, 5000);
 
-    // 按 F9 强制刷新
+    // F9 强制刷新
     window.addEventListener('keydown', (e) => {
         if (e.key === 'F9') {
-            scanPetsInSandbox();
+            console.log('🔄 强制刷新...');
+            scanPetsInBackground();
         }
     });
 
