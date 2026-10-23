@@ -14,7 +14,7 @@
     const CONF = {
         name: 'gewen',
         // 🚨 核心：加了 ?v=2 强制打破 CDN 缓存，拉取最新的模型
-        url: `${CDN_BASE}/pet/gewen1.glb?v=2`,
+        url: `${CDN_BASE}/pet/gewen1.glb?v=3`,
         idle: 'idle_base',
         run: 'run'
     };
