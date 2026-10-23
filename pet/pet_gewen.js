@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 格温宠物 (全动作可调版)
+// @name         3D 格温宠物 (跑动修复版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      13.0.0
+// @version      15.0.0
 // ==/UserScript==
 
 (function () {
@@ -14,7 +14,7 @@
     const CONF = {
         name: 'gewen',
         url: `${CDN_BASE}/pet/gewen1.glb?v=3`, 
-        idle: 'idle_base', // 如果面板没配置，这是保底待机动作
+        idle: 'idle_base', 
         run: 'run'         
     };
 
@@ -96,20 +96,15 @@
         window.updatePetConfig = function() {
             if (!camera || !modelGroup) return;
             const currentCfg = window.petConfig;
-
             camera.position.z = currentCfg.cameraZ;
             modelGroup.position.set(currentCfg.posX, currentCfg.posY, 0);
             modelGroup.scale.set(currentCfg.scale, currentCfg.scale, currentCfg.scale);
 
             if (ambientLight) ambientLight.intensity = currentCfg.ambientLight;
             if (dirLight) dirLight.intensity = currentCfg.dirLight;
-
-            if (renderer) {
-                renderer.domElement.style.filter = `brightness(${currentCfg.brightness}) hue-rotate(${currentCfg.hueRotate}deg)`;
-            }
+            if (renderer) renderer.domElement.style.filter = `brightness(${currentCfg.brightness}) hue-rotate(${currentCfg.hueRotate}deg)`;
         };
 
-        // 🚨 暴露给管理器的接口：面板改了待机动作后，立刻重置动画
         window.replayIdleAction = function() {
             if (window.petConfig && window.petConfig.idleAnim) {
                 playAction(window.petConfig.idleAnim);
@@ -159,7 +154,6 @@
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
                 
-                // 🚨 核心：把动作列表交给管理器
                 window.currentPetActions = Object.keys(actions);
                 
                 const cfg = window.petConfig || {};
@@ -196,7 +190,6 @@
         currentAction = newAction;
     }
 
-    // 🚨 待机彩蛋逻辑（使用面板配置的互动池）
     function startIdleEasterEgg() {
         if (idleTimer) clearInterval(idleTimer);
         idleTimer = setInterval(() => {
@@ -206,7 +199,11 @@
             const actualIdle = cfg.idleAnim || CONF.idle;
 
             if (currentAction._clip.name.toLowerCase().includes(actualIdle)) {
-                const interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
+                let interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
+                if (typeof interactPool === 'string') {
+                    interactPool = interactPool.split(',').map(s => s.trim());
+                }
+
                 const availableEggs = Object.keys(actions).filter(name => 
                     interactPool.some(k => name.includes(k))
                 );
@@ -261,8 +258,21 @@
                 if (dx > 2) targetRotationY = Math.PI / 2; 
                 else if (dx < -2) targetRotationY = -Math.PI / 2; 
                 
-                playAction(CONF.run);
+                // 🚨 核心：模糊寻找跑动动作
+                const cfg = window.petConfig || {};
+                const runAnim = cfg.runAnim || CONF.run;
                 
+                // 如果没有找到精确的 run，就找包含 walk/move 的动作
+                let foundRun = false;
+                if (actions[runAnim]) { playAction(runAnim); foundRun = true; }
+                else {
+                    const fallbackRun = Object.keys(actions).find(n => n.includes('walk') || n.includes('move'));
+                    if (fallbackRun) { playAction(fallbackRun); foundRun = true; }
+                }
+                
+                // 如果实在没有跑动，就保持当前动作，不要强制切
+                if(!foundRun) console.log("模型里没有跑动动作");
+
             } else if (isRotating) {
                 const dx = e.clientX - prevMouseX; 
                 const dy = e.clientY - prevMouseY;
@@ -280,12 +290,18 @@
                 isDragging = false; 
                 container.style.cursor = 'grab';
                 
+                // 🚨 核心：强制打断跑动，恢复待机！
                 const cfg = window.petConfig || {};
                 const actualIdle = cfg.idleAnim || CONF.idle;
                 playAction(actualIdle);
 
+                // 如果只是点击
                 if (dragDistance < 10) {
-                    const interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
+                    let interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
+                    if (typeof interactPool === 'string') {
+                        interactPool = interactPool.split(',').map(s => s.trim());
+                    }
+
                     const availableAnims = Object.keys(actions).filter(name => 
                         interactPool.some(k => name.includes(k))
                     );
