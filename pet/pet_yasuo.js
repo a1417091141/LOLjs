@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 亚索宠物 (全动作修复版)
+// @name         3D 亚索宠物 (全动作可调版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      12.0.0
+// @version      13.0.0
 // ==/UserScript==
 
 (function () {
@@ -55,7 +55,7 @@
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js');
 
         const THREE = window.THREE;
-        // 亚索的默认相机距离和高度
+        // 亚索的默认相机
         const cfg = window.petConfig || { scale: 4.5, cameraZ: 6.5, ambientLight: 6, dirLight: 5, brightness: 1, hueRotate: 0, posX: 0, posY: 0 };
 
         container = document.createElement('div');
@@ -94,7 +94,6 @@
         loadPet();
         animate(THREE);
 
-        // 监听管理器的参数变化
         window.updatePetConfig = function() {
             if (!camera || !modelGroup) return;
             const currentCfg = window.petConfig;
@@ -108,6 +107,13 @@
 
             if (renderer) {
                 renderer.domElement.style.filter = `brightness(${currentCfg.brightness}) hue-rotate(${currentCfg.hueRotate}deg)`;
+            }
+        };
+
+        // 🚨 暴露给管理器的接口
+        window.replayIdleAction = function() {
+            if (window.petConfig && window.petConfig.idleAnim) {
+                playAction(window.petConfig.idleAnim);
             }
         };
 
@@ -154,7 +160,13 @@
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
                 
-                playAction(CONF.idle);
+                // 🚨 把动作列表交给管理器
+                window.currentPetActions = Object.keys(actions);
+                
+                const cfg = window.petConfig || {};
+                const actualIdle = cfg.idleAnim || CONF.idle;
+                playAction(actualIdle);
+                
                 startIdleEasterEgg(); 
             }
             
@@ -185,22 +197,24 @@
         currentAction = newAction;
     }
 
-    // 待机彩蛋
     function startIdleEasterEgg() {
         if (idleTimer) clearInterval(idleTimer);
         idleTimer = setInterval(() => {
             if (isDragging || isRotating || !currentAction) return;
-            if (currentAction._clip.name.toLowerCase().includes(CONF.idle)) {
-                // 亚索特定的彩蛋：喝酒、耍剑、大笑、嘲讽等
-                const possibleEggs = ['laugh', 'taunt', 'joke', 'dance', 'idle01', 'idle02'];
+            
+            const cfg = window.petConfig || {};
+            const actualIdle = cfg.idleAnim || CONF.idle;
+
+            if (currentAction._clip.name.toLowerCase().includes(actualIdle)) {
+                const interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
                 const availableEggs = Object.keys(actions).filter(name => 
-                    possibleEggs.some(k => name.includes(k))
+                    interactPool.some(k => name.includes(k))
                 );
                 
                 if (availableEggs.length > 0) {
                     const randomEgg = availableEggs[Math.floor(Math.random() * availableEggs.length)];
                     playAction(randomEgg, false);
-                    setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                    setTimeout(() => { if (!isDragging) playAction(actualIdle); }, 3500);
                 }
             }
         }, 45000); 
@@ -265,18 +279,21 @@
             if (isDragging) {
                 isDragging = false; 
                 container.style.cursor = 'grab';
-                playAction(CONF.idle);
+                
+                const cfg = window.petConfig || {};
+                const actualIdle = cfg.idleAnim || CONF.idle;
+                playAction(actualIdle);
 
                 if (dragDistance < 10) {
-                    const interactKeywords = ['laugh', 'taunt', 'joke', 'dance'];
+                    const interactPool = cfg.interactAnims || ['laugh', 'taunt', 'joke', 'dance'];
                     const availableAnims = Object.keys(actions).filter(name => 
-                        interactKeywords.some(k => name.includes(k))
+                        interactPool.some(k => name.includes(k))
                     );
 
                     if (availableAnims.length > 0) {
                         const randomAnim = availableAnims[Math.floor(Math.random() * availableAnims.length)];
                         playAction(randomAnim, false); 
-                        setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                        setTimeout(() => { if (!isDragging) playAction(actualIdle); }, 3500);
                     }
                 }
             }
