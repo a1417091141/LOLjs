@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 亚索宠物 (纯净待机版 - 防缓存)
+// @name         3D 亚索宠物 (纯净待机版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      7.0.0
+// @version      8.0.0
 // ==/UserScript==
 
 (function () {
@@ -13,8 +13,7 @@
     
     const CONF = {
         name: 'yasuo',
-        // 🚨 核心：加了 ?v=2 强制打破 CDN 缓存，拉取最新的模型
-        url: `${CDN_BASE}/pet/yasuo.glb?v=2`,
+        url: `${CDN_BASE}/pet/yasuo.glb?v=2`, 
         idle: 'idle_base',
         run: 'run_base'
     };
@@ -24,6 +23,9 @@
     let petModel = null; 
     let actions = {};
     let currentAction = null;
+    let modelGroup = null;
+    let ambientLight = null;
+    let dirLight = null;
     
     let isDragging = false;
     let isRotating = false;
@@ -44,13 +46,13 @@
     }
 
     async function initEngine() {
-        // 防止重复初始化
         if (document.getElementById('three-pet-container')) return;
 
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js');
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js');
 
         const THREE = window.THREE;
+        const cfg = window.petConfig || { scale: 4.5, cameraZ: 6.5, ambientLight: 6, dirLight: 5, brightness: 1, hueRotate: 0, posX: 0, posY: 0 };
 
         container = document.createElement('div');
         container.id = 'three-pet-container';
@@ -63,9 +65,7 @@
 
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(45, 350 / 400, 0.1, 1000);
-        
-        // 亚索的镜头稍微近一点点
-        camera.position.set(0, 1.5, 6.5); 
+        camera.position.set(0, 1.5, cfg.cameraZ); 
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(350, 400);
@@ -73,17 +73,40 @@
         if(THREE.sRGBEncoding) renderer.outputEncoding = THREE.sRGBEncoding;
         container.appendChild(renderer.domElement);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 6)); 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 5);
-        dirLight.position.set(5, 10, 7); scene.add(dirLight);
+        ambientLight = new THREE.AmbientLight(0xffffff, cfg.ambientLight); 
+        scene.add(ambientLight); 
+        
+        dirLight = new THREE.DirectionalLight(0xffffff, cfg.dirLight);
+        dirLight.position.set(5, 10, 7); 
+        scene.add(dirLight);
+        
         const fillLight = new THREE.DirectionalLight(0xffffff, 3);
-        fillLight.position.set(-5, 5, -5); scene.add(fillLight);
+        fillLight.position.set(-5, 5, -5); 
+        scene.add(fillLight);
 
         clock = new THREE.Clock();
         
         setupInteractions(THREE);
         loadPet();
         animate(THREE);
+
+        window.updatePetConfig = function() {
+            if (!camera || !modelGroup) return;
+            const currentCfg = window.petConfig;
+
+            camera.position.z = currentCfg.cameraZ;
+            modelGroup.position.set(currentCfg.posX, currentCfg.posY, 0);
+            modelGroup.scale.set(currentCfg.scale, currentCfg.scale, currentCfg.scale);
+
+            if (ambientLight) ambientLight.intensity = currentCfg.ambientLight;
+            if (dirLight) dirLight.intensity = currentCfg.dirLight;
+
+            if (renderer) {
+                renderer.domElement.style.filter = `brightness(${currentCfg.brightness}) hue-rotate(${currentCfg.hueRotate}deg)`;
+            }
+        };
+
+        renderer.domElement.style.filter = `brightness(${cfg.brightness}) hue-rotate(${cfg.hueRotate}deg)`;
     }
 
     function loadPet() {
@@ -105,9 +128,8 @@
             const center = box.getCenter(new THREE.Vector3());
             petModel.position.sub(center); 
             
-            // 缩放适配
             const maxDim = Math.max(size.x, size.y, size.z);
-            const scale = 4.5 / maxDim; 
+            const scale = 1 / maxDim; 
             petModel.scale.set(scale, scale, scale);
             
             const scaledBox = new THREE.Box3().setFromObject(petModel);
@@ -117,7 +139,7 @@
                 if (child.isMesh && child.material) child.material.metalness = 0.1; 
             });
 
-            const modelGroup = new THREE.Group();
+            modelGroup = new THREE.Group();
             modelGroup.add(petModel);
             scene.add(modelGroup);
 
@@ -128,6 +150,11 @@
                 });
                 
                 playAction(CONF.idle);
+            }
+            
+            if(window.petConfig) {
+                modelGroup.scale.set(window.petConfig.scale, window.petConfig.scale, window.petConfig.scale);
+                modelGroup.position.set(window.petConfig.posX, window.petConfig.posY, 0);
             }
         }, undefined, (error) => {
             console.error(`[Pet] ${CONF.name} 加载失败:`, error);
@@ -243,26 +270,17 @@
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
     };
 
-    // ==========================================
-    // 🚨 核心：主动加载 + 严格防重 + 监听广播
-    // ==========================================
     function safeStart() {
-        // 如果场上已经有模型了（不管是自己还是别人），直接退出
         if (document.getElementById('three-pet-container')) return;
         initEngine();
     }
 
-    // 1. 监听管理器发来的切换指令
     window.addEventListener('spawn_pet', function(e) {
-        if (e.detail === CONF.name) {
-            safeStart();
-        }
+        if (e.detail === CONF.name) safeStart();
     });
 
-    // 2. 默认主动加载（如果是上次记住的宠物，或者没有记录）
     const savedPet = localStorage.getItem('pet_current_model');
     if (!savedPet || savedPet === CONF.name) {
-        // 延迟 3 秒等客户端 UI 加载完，直接自己蹦出来
         setTimeout(safeStart, 3000);
     }
 
