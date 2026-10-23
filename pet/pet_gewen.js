@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 格温宠物 (纯净待机版)
+// @name         3D 格温宠物 (全动作互动版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      8.0.0
+// @version      10.0.0
 // ==/UserScript==
 
 (function () {
@@ -13,7 +13,7 @@
     
     const CONF = {
         name: 'gewen',
-        url: `${CDN_BASE}/pet/gewen1.glb?v=3`, // 🚨 更新了最新模型和防缓存
+        url: `${CDN_BASE}/pet/gewen1.glb?v=3`, 
         idle: 'idle_base', 
         run: 'run'         
     };
@@ -30,9 +30,12 @@
     let isDragging = false;
     let isRotating = false;
     let prevMouseX = 0, prevMouseY = 0;
+    let dragDistance = 0; // 🚨 记录拖拽距离，区分点击和拖拽
     
     let targetRotationX = 0, targetRotationY = 0;
     let currentRotationX = 0, currentRotationY = 0;
+
+    let idleTimer = null; // 🚨 待机彩蛋定时器
 
     function loadScript(src) {
         return new Promise((resolve, reject) => {
@@ -90,7 +93,6 @@
         loadPet();
         animate(THREE);
 
-        // 实时参数更新
         window.updatePetConfig = function() {
             if (!camera || !modelGroup) return;
             const currentCfg = window.petConfig;
@@ -130,8 +132,8 @@
             petModel.position.sub(center); 
             
             const maxDim = Math.max(size.x, size.y, size.z);
-            const scale = 1 / maxDim; // 保持基础比例
-            petModel.scale.set(scale, scale, scale);
+            const baseScale = 1 / maxDim; 
+            petModel.scale.set(baseScale, baseScale, baseScale);
             
             const scaledBox = new THREE.Box3().setFromObject(petModel);
             petModel.position.y -= scaledBox.min.y; 
@@ -151,9 +153,9 @@
                 });
                 
                 playAction(CONF.idle);
+                startIdleEasterEgg(); // 🚨 启动待机彩蛋
             }
             
-            // 初始化应用一次大小参数
             if(window.petConfig) {
                 modelGroup.scale.set(window.petConfig.scale, window.petConfig.scale, window.petConfig.scale);
                 modelGroup.position.set(window.petConfig.posX, window.petConfig.posY, 0);
@@ -164,6 +166,7 @@
     }
 
     function playAction(actionName, loop = true) {
+        if (!actions) return;
         const actualKey = Object.keys(actions).find(n => n === actionName) || 
                           Object.keys(actions).find(n => n.includes(actionName));
                           
@@ -180,11 +183,33 @@
         currentAction = newAction;
     }
 
+    // 🚨 待机彩蛋逻辑（每隔 45 秒触发一次搞笑动作）
+    function startIdleEasterEgg() {
+        if (idleTimer) clearInterval(idleTimer);
+        idleTimer = setInterval(() => {
+            // 只有在没有拖拽，且当前处于待机状态时才触发
+            if (isDragging || isRotating || !currentAction) return;
+            if (currentAction._clip.name.toLowerCase().includes(CONF.idle)) {
+                const possibleEggs = ['laugh', 'taunt', 'joke', 'dance', 'idle01', 'idle02'];
+                const availableEggs = Object.keys(actions).filter(name => 
+                    possibleEggs.some(k => name.includes(k))
+                );
+                
+                if (availableEggs.length > 0) {
+                    const randomEgg = availableEggs[Math.floor(Math.random() * availableEggs.length)];
+                    playAction(randomEgg, false);
+                    setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                }
+            }
+        }, 45000); // 45秒触发一次
+    }
+
     function setupInteractions(THREE) {
         container.addEventListener('mousedown', (e) => {
             e.preventDefault();
             if (e.button === 0) {
                 isDragging = true; 
+                dragDistance = 0; // 重置距离
                 container.style.cursor = 'grabbing';
                 prevMouseX = e.clientX; 
                 prevMouseY = e.clientY;
@@ -211,6 +236,9 @@
                 prevMouseX = e.clientX; 
                 prevMouseY = e.clientY;
                 
+                // 累加拖拽距离
+                dragDistance += Math.abs(dx) + Math.abs(dy);
+
                 const rect = container.getBoundingClientRect();
                 container.style.left = (rect.left + dx) + 'px'; 
                 container.style.top = (rect.top + dy) + 'px';
@@ -237,6 +265,20 @@
                 isDragging = false; 
                 container.style.cursor = 'grab';
                 playAction(CONF.idle);
+
+                // 🚨 如果是点击（移动距离小于 10 像素），触发互动动作
+                if (dragDistance < 10) {
+                    const interactKeywords = ['laugh', 'taunt', 'joke', 'dance'];
+                    const availableAnims = Object.keys(actions).filter(name => 
+                        interactKeywords.some(k => name.includes(k))
+                    );
+
+                    if (availableAnims.length > 0) {
+                        const randomAnim = availableAnims[Math.floor(Math.random() * availableAnims.length)];
+                        playAction(randomAnim, false); 
+                        setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
+                    }
+                }
             }
             isRotating = false;
         });
@@ -270,6 +312,7 @@
 
     window.stopPetAnimation = function() {
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
+        if (idleTimer) clearInterval(idleTimer); // 🚨 清理彩蛋定时器
     };
 
     function safeStart() {
