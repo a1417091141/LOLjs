@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         宠物管理器 (原生方块完美版)
+// @name         宠物管理器 (完美原生克隆版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      23.0.0
+// @version      24.0.0
 // ==/UserScript==
 
 (function () {
@@ -30,42 +30,33 @@
     // 注入按钮
     function injectBtn() {
         if (document.getElementById('pet-manager-btn')) return;
-        const versionBar = document.querySelector('.version-bar-container');
-        if (!versionBar) return;
 
-        // 🚨 核心：直接找一个原生的按钮作为模板（语音按钮或反馈按钮）
-        const nativeBtn = document.querySelector('.social-button') || document.querySelector('.bug-report-button-always-top');
-        
-        let btn;
-        if (nativeBtn) {
-            // 克隆原生按钮的外壳（这会自动继承所有的黑底、金边、尺寸和悬停效果）
-            btn = nativeBtn.cloneNode(true);
-            btn.className = ''; // 去除原本特有的行为 class，防止报错
-            // 清理内部元素，只留外壳
-            btn.innerHTML = ''; 
-            btn.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin-right: 5px; cursor: pointer; border-radius: 2px;';
-        } else {
-            // 如果没找到原生按钮（兜底），就手写一个相似的
-            btn = document.createElement('button');
-            btn.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin-right: 5px; cursor: pointer; background: #0f1114; border: 1px solid #5b4a22; border-radius: 2px;';
-        }
+        // 🚨 核心：直接找到原生的 Bug 按钮
+        const bugBtn = document.querySelector('.bug-report-button-always-top');
+        if (!bugBtn) return; // 如果没加载出来就等下次
 
+        // 1. 完美克隆这个 Bug 按钮（连同它所有的原生样式、边框、悬停效果）
+        const btn = bugBtn.cloneNode(true);
         btn.id = 'pet-manager-btn';
-
-        // 内部放一个小巧的金色爪印图标
+        btn.removeAttribute('data-dd-action-name'); // 移除原生自带的数据属性防冲突
+        
+        // 2. 保留原本的 class (如 bug-report-button-always-top) 以继承宽度、高度、黑底金边
+        // 但我们需要替换掉里面的图标
         btn.innerHTML = `
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="#C8AA6E">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="margin-top: 2px;">
                 <path d="M12 11c-1.1 0-2 .9-2 2 0 1.1.9 2 2 2s2-.9 2-2c0-1.1-.9-2-2-2zm4-5c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-8 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm10 4c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm7.7 7.5c-.6-.8-1.5-1.3-2.5-1.3s-2 .5-2.7 1.3c-.5.6-.2 1.5.5 1.7 1.5.4 3 .4 4.4 0 .7-.2.9-1.1.3-1.7z"/>
             </svg>
         `;
 
-        btn.onclick = () => {
+        // 3. 点击事件
+        btn.onclick = (e) => {
+            e.preventDefault();
             const nextIndex = (PET_LIST.indexOf(currentPetKey) + 1) % PET_LIST.length;
             switchPet(PET_LIST[nextIndex]);
         };
 
-        // 插入到版本号前面
-        versionBar.prepend(btn);
+        // 4. 将它插在 Bug 按钮的左侧，作为兄弟节点
+        bugBtn.parentNode.insertBefore(btn, bugBtn);
     }
 
     // 启动引擎
