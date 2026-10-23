@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 亚索宠物
+// @name         3D 亚索宠物 (纯净待机版 - 防缓存)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      4.1.0
+// @version      7.0.0
 // ==/UserScript==
 
 (function () {
@@ -13,11 +13,10 @@
     
     const CONF = {
         name: 'yasuo',
-        url: `${CDN_BASE}/pet/yasuo.glb`,
+        // 🚨 核心：加了 ?v=2 强制打破 CDN 缓存，拉取最新的模型
+        url: `${CDN_BASE}/pet/yasuo.glb?v=2`,
         idle: 'idle_base',
-        run: 'run_base',
-        egg: ['idle02', 'idle01'],
-        click: ['laugh', 'taunt', 'joke', 'dance']
+        run: 'run_base'
     };
 
     let container = null;
@@ -29,11 +28,9 @@
     let isDragging = false;
     let isRotating = false;
     let prevMouseX = 0, prevMouseY = 0;
-    let dragDistance = 0; 
-
+    
     let targetRotationX = 0, targetRotationY = 0;
     let currentRotationX = 0, currentRotationY = 0;
-    let idleTimer = null;
 
     function loadScript(src) {
         return new Promise((resolve, reject) => {
@@ -47,6 +44,9 @@
     }
 
     async function initEngine() {
+        // 防止重复初始化
+        if (document.getElementById('three-pet-container')) return;
+
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js');
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js');
 
@@ -63,7 +63,9 @@
 
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(45, 350 / 400, 0.1, 1000);
-        camera.position.set(0, 1.5, 4.5); 
+        
+        // 亚索的镜头稍微近一点点
+        camera.position.set(0, 1.5, 6.5); 
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(350, 400);
@@ -91,13 +93,6 @@
         loader.load(CONF.url, (gltf) => {
             if (petModel) {
                 scene.remove(petModel.parent);
-                petModel.traverse((child) => {
-                    if (child.isMesh) {
-                        child.geometry.dispose();
-                        if (child.material.map) child.material.map.dispose();
-                        child.material.dispose();
-                    }
-                });
             }
             if (mixer) mixer.stopAllAction();
             actions = {};
@@ -109,9 +104,12 @@
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
             petModel.position.sub(center); 
+            
+            // 缩放适配
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 4.5 / maxDim; 
             petModel.scale.set(scale, scale, scale);
+            
             const scaledBox = new THREE.Box3().setFromObject(petModel);
             petModel.position.y -= scaledBox.min.y; 
 
@@ -128,19 +126,20 @@
                 gltf.animations.forEach(clip => {
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
-                playAction(CONF.idle);
                 
-                if (idleTimer) clearInterval(idleTimer);
-                idleTimer = setInterval(triggerEasterEgg, 45000);
+                playAction(CONF.idle);
             }
         }, undefined, (error) => {
             console.error(`[Pet] ${CONF.name} 加载失败:`, error);
         });
     }
 
-    function playAction(keyword, loop = true) {
-        const actualKey = Object.keys(actions).find(n => n.includes(keyword));
+    function playAction(actionName, loop = true) {
+        const actualKey = Object.keys(actions).find(n => n === actionName) || 
+                          Object.keys(actions).find(n => n.includes(actionName));
+                          
         if (!actualKey) return;
+        
         const newAction = actions[actualKey];
         if (currentAction === newAction) return; 
 
@@ -152,30 +151,25 @@
         currentAction = newAction;
     }
 
-    function triggerEasterEgg() {
-        if (isDragging || !currentAction) return;
-        if (currentAction._clip.name.toLowerCase().includes(CONF.idle)) {
-            const availableEggs = CONF.egg.filter(name => actions[name]);
-            if (availableEggs.length > 0) {
-                const randomEgg = availableEggs[Math.floor(Math.random() * availableEggs.length)];
-                playAction(randomEgg, false);
-                setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
-            }
-        }
-    }
-
     function setupInteractions(THREE) {
         container.addEventListener('mousedown', (e) => {
             e.preventDefault();
             if (e.button === 0) {
-                isDragging = true; dragDistance = 0; container.style.cursor = 'grabbing';
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
+                isDragging = true; 
+                container.style.cursor = 'grabbing';
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
                 const rect = container.getBoundingClientRect();
-                container.style.bottom = 'auto'; container.style.right = 'auto';
-                container.style.left = rect.left + 'px'; container.style.top = rect.top + 'px';
+                container.style.bottom = 'auto'; 
+                container.style.right = 'auto';
+                container.style.left = rect.left + 'px'; 
+                container.style.top = rect.top + 'px';
             } else if (e.button === 2) {
-                isRotating = true; container.style.cursor = 'move';
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
+                isRotating = true; 
+                container.style.cursor = 'move';
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
             }
         });
 
@@ -183,38 +177,37 @@
 
         window.addEventListener('mousemove', (e) => {
             if (isDragging) {
-                const dx = e.clientX - prevMouseX; const dy = e.clientY - prevMouseY;
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
-                dragDistance += Math.abs(dx) + Math.abs(dy);
+                const dx = e.clientX - prevMouseX; 
+                const dy = e.clientY - prevMouseY;
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
                 const rect = container.getBoundingClientRect();
-                container.style.left = (rect.left + dx) + 'px'; container.style.top = (rect.top + dy) + 'px';
+                container.style.left = (rect.left + dx) + 'px'; 
+                container.style.top = (rect.top + dy) + 'px';
 
                 if (dx > 2) targetRotationY = Math.PI / 2; 
                 else if (dx < -2) targetRotationY = -Math.PI / 2; 
+                
                 playAction(CONF.run);
                 
             } else if (isRotating) {
-                const dx = e.clientX - prevMouseX; const dy = e.clientY - prevMouseY;
-                prevMouseX = e.clientX; prevMouseY = e.clientY;
-                targetRotationY += dx * 0.02; targetRotationX += dy * 0.02;
+                const dx = e.clientX - prevMouseX; 
+                const dy = e.clientY - prevMouseY;
+                prevMouseX = e.clientX; 
+                prevMouseY = e.clientY;
+                
+                targetRotationY += dx * 0.02; 
+                targetRotationX += dy * 0.02;
                 targetRotationX = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, targetRotationX));
             }
         });
 
         window.addEventListener('mouseup', () => {
             if (isDragging) {
-                isDragging = false; container.style.cursor = 'grab';
+                isDragging = false; 
+                container.style.cursor = 'grab';
                 playAction(CONF.idle);
-                if (dragDistance < 10) {
-                    const clicks = Object.keys(actions).filter(n => 
-                        CONF.click.some(k => n.includes(k))
-                    );
-                    if (clicks.length > 0) {
-                        playAction(clicks[Math.floor(Math.random() * clicks.length)], false);
-                        setTimeout(() => { if (!isDragging) playAction(CONF.idle); }, 3500);
-                    }
-                    targetRotationY = 0; 
-                }
             }
             isRotating = false;
         });
@@ -223,7 +216,7 @@
             e.preventDefault();
             if (e.deltaY < 0) camera.position.z -= 0.2; 
             else camera.position.z += 0.2;
-            camera.position.z = Math.max(2, Math.min(8, camera.position.z));
+            camera.position.z = Math.max(3, Math.min(10, camera.position.z));
         }, { passive: false });
     }
 
@@ -248,19 +241,29 @@
 
     window.stopPetAnimation = function() {
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
-        if (idleTimer) clearInterval(idleTimer);
     };
 
-    if (window.current_pet === CONF.name) {
+    // ==========================================
+    // 🚨 核心：主动加载 + 严格防重 + 监听广播
+    // ==========================================
+    function safeStart() {
+        // 如果场上已经有模型了（不管是自己还是别人），直接退出
+        if (document.getElementById('three-pet-container')) return;
         initEngine();
     }
-    
+
+    // 1. 监听管理器发来的切换指令
     window.addEventListener('spawn_pet', function(e) {
         if (e.detail === CONF.name) {
-            if (!document.getElementById('three-pet-container')) {
-                initEngine();
-            }
+            safeStart();
         }
     });
+
+    // 2. 默认主动加载（如果是上次记住的宠物，或者没有记录）
+    const savedPet = localStorage.getItem('pet_current_model');
+    if (!savedPet || savedPet === CONF.name) {
+        // 延迟 3 秒等客户端 UI 加载完，直接自己蹦出来
+        setTimeout(safeStart, 3000);
+    }
 
 })();
