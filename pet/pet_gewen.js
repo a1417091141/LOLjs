@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 格温宠物 (纯净待机版)
+// @name         3D 格温宠物 (纯净待机版 - 防缓存)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      6.0.0
+// @version      7.0.0
 // ==/UserScript==
 
 (function () {
@@ -11,12 +11,12 @@
 
     const CDN_BASE = 'https://cdn.jsdmirror.com/gh/a1417091141/LOLjs@main';
     
-    // 🚨 纯手动配置，只保留最基础的动作
     const CONF = {
         name: 'gewen',
-        url: `${CDN_BASE}/pet/gewen.glb`,
-        idle: 'idle_base', // 你截图里确认的待机动作
-        run: 'run'         // 如果拖拽时像滑冰，可以尝试换成 'walk' 或者 'run_base'
+        // 🚨 核心：加了 ?v=2 强制打破 CDN 缓存，拉取最新的模型
+        url: `${CDN_BASE}/pet/gewen.glb?v=2`,
+        idle: 'idle_base',
+        run: 'run'
     };
 
     let container = null;
@@ -44,6 +44,9 @@
     }
 
     async function initEngine() {
+        // 防止重复初始化
+        if (document.getElementById('three-pet-container')) return;
+
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js');
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js');
 
@@ -61,7 +64,7 @@
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(45, 350 / 400, 0.1, 1000);
         
-        // 🚨 适配格温的远距离镜头，防止大头贴
+        // 适配格温的远距离镜头
         camera.position.set(0, 1.0, 8.5); 
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -102,7 +105,7 @@
             const center = box.getCenter(new THREE.Vector3());
             petModel.position.sub(center); 
             
-            // 缩小一点，让她完整显示
+            // 缩放适配
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 3.5 / maxDim; 
             petModel.scale.set(scale, scale, scale);
@@ -124,7 +127,6 @@
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
                 
-                // 🚨 启动时只播放待机动作
                 playAction(CONF.idle);
             }
         }, undefined, (error) => {
@@ -133,7 +135,6 @@
     }
 
     function playAction(actionName, loop = true) {
-        // 先找完全匹配的，再找模糊匹配的（防大小写问题）
         const actualKey = Object.keys(actions).find(n => n === actionName) || 
                           Object.keys(actions).find(n => n.includes(actionName));
                           
@@ -188,7 +189,6 @@
                 if (dx > 2) targetRotationY = Math.PI / 2; 
                 else if (dx < -2) targetRotationY = -Math.PI / 2; 
                 
-                // 🚨 拖拽时只播放跑动
                 playAction(CONF.run);
                 
             } else if (isRotating) {
@@ -207,8 +207,6 @@
             if (isDragging) {
                 isDragging = false; 
                 container.style.cursor = 'grab';
-                
-                // 🚨 松手后恢复待机
                 playAction(CONF.idle);
             }
             isRotating = false;
@@ -245,16 +243,27 @@
         if (window.currentAnimFrameId) cancelAnimationFrame(window.currentAnimFrameId);
     };
 
-    if (window.current_pet === CONF.name) {
+    // ==========================================
+    // 🚨 核心：主动加载 + 严格防重 + 监听广播
+    // ==========================================
+    function safeStart() {
+        // 如果场上已经有模型了（不管是自己还是别人），直接退出
+        if (document.getElementById('three-pet-container')) return;
         initEngine();
     }
-    
+
+    // 1. 监听管理器发来的切换指令
     window.addEventListener('spawn_pet', function(e) {
         if (e.detail === CONF.name) {
-            if (!document.getElementById('three-pet-container')) {
-                initEngine();
-            }
+            safeStart();
         }
     });
+
+    // 2. 默认主动加载（如果是上次记住的宠物，或者没有记录）
+    const savedPet = localStorage.getItem('pet_current_model');
+    if (!savedPet || savedPet === CONF.name) {
+        // 延迟 3 秒等客户端 UI 加载完，直接自己蹦出来
+        setTimeout(safeStart, 3000);
+    }
 
 })();
