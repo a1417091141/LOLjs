@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (实时透视完全体)
-// @version      11.2.0
+// @description  在选人界面显示对方英雄及备选池 (动态侦测版)
+// @version      11.4.0
 // ==/PenguLoader==
 
 (function () {
@@ -222,12 +222,21 @@
         }
     }
 
-    // 🚨 核心：实时显示敌方备选池（固定显示框体）
+    // 🚨 核心：动态侦测敌方备选池（有数据才显示，无数据则隐藏）
     function renderEnemyBench(benchIds) {
         const myBench = document.querySelector('.champion-bench.ember-view');
         if (!myBench) return;
 
-        if (!enemyBenchContainer) {
+        // 1. 如果对面没开插件或没有备选数据，直接隐藏框体
+        if (!benchIds || benchIds.length === 0) {
+            if (enemyBenchContainer) {
+                enemyBenchContainer.style.display = 'none';
+            }
+            return;
+        }
+
+        // 2. 有数据时，检查框体是否存在，不存在则克隆
+        if (!enemyBenchContainer || !enemyBenchContainer.parentNode) {
             enemyBenchContainer = myBench.cloneNode(true);
             enemyBenchContainer.id = 'enemy-bench-display';
             const label = enemyBenchContainer.querySelector('.bench-label');
@@ -240,20 +249,14 @@
             if (container) container.innerHTML = '';
             
             myBench.parentNode.insertBefore(enemyBenchContainer, myBench.nextSibling);
-            
-            enemyBenchContainer.style.display = 'block';
             enemyBenchContainer.style.marginTop = '10px';
         }
 
+        // 3. 确保框体显示
+        enemyBenchContainer.style.display = 'block';
+
         const enemyContainer = enemyBenchContainer.querySelector('.bench-container');
         if (!enemyContainer) return;
-
-        // 没换人就清空，保留框体
-        if (!benchIds || benchIds.length === 0) {
-            enemyContainer.innerHTML = '';
-            enemyContainer.removeAttribute('data-sig');
-            return;
-        }
 
         const currentSig = JSON.stringify(benchIds);
         if (enemyContainer.getAttribute('data-sig') === currentSig) return;
@@ -265,8 +268,8 @@
             const item = document.createElement('div');
             item.className = 'champion-bench-item ember-view';
             item.innerHTML = `
-                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box;">
-                    <div style="background-image: url('/lol-game-data/assets/v1/champion-icons/${cid}.png');" class="bench-champion-background"></div>
+                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box; background-color: #000;">
+                    <div style="background-image: url('/lol-game-data/assets/v1/champion-icons/${cid}.png'); width: 100%; height: 100%; background-size: cover; border-radius: 50%;"></div>
                 </div>
             `;
             enemyContainer.appendChild(item);
@@ -332,6 +335,7 @@
                 } else {
                     updateIconStatus(false);
                     clearInjected();
+                    renderEnemyBench([]); // 没数据时隐藏备选池框
                 }
             }
         } else {
