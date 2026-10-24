@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (动态侦测版)
-// @version      11.4.0
+// @description  在选人界面显示对方英雄及备选池 (全队同步强力去重版)
+// @version      11.5.0
 // ==/PenguLoader==
 
 (function () {
@@ -222,12 +222,12 @@
         }
     }
 
-    // 🚨 核心：动态侦测敌方备选池（有数据才显示，无数据则隐藏）
+    // 🚨 核心：动态侦测敌方备选池（全队合并去重版）
     function renderEnemyBench(benchIds) {
         const myBench = document.querySelector('.champion-bench.ember-view');
         if (!myBench) return;
 
-        // 1. 如果对面没开插件或没有备选数据，直接隐藏框体
+        // 1. 没数据则隐藏
         if (!benchIds || benchIds.length === 0) {
             if (enemyBenchContainer) {
                 enemyBenchContainer.style.display = 'none';
@@ -235,7 +235,10 @@
             return;
         }
 
-        // 2. 有数据时，检查框体是否存在，不存在则克隆
+        // 2. 去重：因为备选池是全队共享的，对面如果 5 个人都开插件，会传来 5 个相同的池子
+        const uniqueBenchIds = [...new Set(benchIds)];
+
+        // 3. 检查框体是否存在，不存在则克隆
         if (!enemyBenchContainer || !enemyBenchContainer.parentNode) {
             enemyBenchContainer = myBench.cloneNode(true);
             enemyBenchContainer.id = 'enemy-bench-display';
@@ -252,19 +255,18 @@
             enemyBenchContainer.style.marginTop = '10px';
         }
 
-        // 3. 确保框体显示
         enemyBenchContainer.style.display = 'block';
 
         const enemyContainer = enemyBenchContainer.querySelector('.bench-container');
         if (!enemyContainer) return;
 
-        const currentSig = JSON.stringify(benchIds);
+        const currentSig = JSON.stringify(uniqueBenchIds);
         if (enemyContainer.getAttribute('data-sig') === currentSig) return;
         enemyContainer.setAttribute('data-sig', currentSig);
 
         enemyContainer.innerHTML = '';
 
-        benchIds.forEach(cid => {
+        uniqueBenchIds.forEach(cid => {
             const item = document.createElement('div');
             item.className = 'champion-bench-item ember-view';
             item.innerHTML = `
@@ -335,7 +337,7 @@
                 } else {
                     updateIconStatus(false);
                     clearInjected();
-                    renderEnemyBench([]); // 没数据时隐藏备选池框
+                    renderEnemyBench([]);
                 }
             }
         } else {
