@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美最终版)
-// @version      10.6.0
+// @description  在选人界面显示对方英雄及备选池 (官方 UI 植入版)
+// @version      11.1.0
 // ==/PenguLoader==
 
 (function () {
@@ -20,6 +20,7 @@
     const injectedNodes = new Set();
     
     let floatingIcon = null;
+    let enemyBenchContainer = null; // 🚨 用来存放官方风格敌方备选池的容器
 
     async function lcuGet(path) {
         try {
@@ -59,11 +60,11 @@
                 sessionStorage.setItem('opp_display_party_id', partyId);
                 lastOpponentSig = ''; 
                 lastUploadSig = '';
-                console.log('[OpponentDisplay] 房间已更新:', partyId);
             }
         }
     }
 
+    // 上传数据（增加备选池）
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
         
@@ -73,7 +74,14 @@
             championId: p.championId || 0,
             championPickIntent: p.championPickIntent || 0,
         }));
-        const currentSig = JSON.stringify(players);
+
+        let bench = [];
+        if (Array.isArray(session.benchChampions)) {
+            bench = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
+        }
+
+        const payload = { players: players, bench: bench };
+        const currentSig = JSON.stringify(payload);
         if (currentSig === lastUploadSig) return;
         lastUploadSig = currentSig;
 
@@ -82,6 +90,7 @@
         formData.append('partyId', partyId);
         formData.append('uploaderPuuid', myPuuid);
         formData.append('players', JSON.stringify(players));
+        formData.append('bench', JSON.stringify(bench));
 
         try { await fetch(SERVER_BASE, { method: 'POST', body: formData }); } catch (e) {}
     }
@@ -139,6 +148,10 @@
         if (floatingIcon && floatingIcon.parentNode) {
             floatingIcon.parentNode.removeChild(floatingIcon);
             floatingIcon = null;
+        }
+        if (enemyBenchContainer && enemyBenchContainer.parentNode) {
+            enemyBenchContainer.parentNode.removeChild(enemyBenchContainer);
+            enemyBenchContainer = null;
         }
     }
 
@@ -210,40 +223,94 @@
         }
     }
 
-    function renderOpponent(opponent) {
-        // 🚨 核心保障：只有服务器返回了准确划分的敌方数据才渲染
-        if (!opponent || !opponent.enemyTeam || opponent.enemyTeam.length === 0) {
-            updateIconStatus(false);
-            clearInjected(); // 如果对面没开插件，清空所有注入，绝不显示队友
+    // 🚨 核心：在原版备选池下方克隆一个敌方备选池
+    function renderEnemyBench(benchIds) {
+        // 查找原版的我方备选池主容器
+        const myBench = document.querySelector('.champion-bench.ember-view');
+        if (!myBench) return;
+
+        // 如果还没创建，就在原版后面插入一个结构一模一样的克隆体
+        if (!enemyBenchContainer) {
+            enemyBenchContainer = myBench.cloneNode(true);
+            enemyBenchContainer.id = 'enemy-bench-display';
+            // 修改标签文字
+            const label = enemyBenchContainer.querySelector('.bench-label');
+            if (label) {
+                label.innerHTML = '敌方可用';
+                label.style.color = '#E74C3C'; // 改成红色醒目标识
+                label.style.textShadow = '0 0 5px rgba(231, 76, 60, 0.5)';
+            }
+            // 隐藏掉原本克隆过来的图标，稍后我们自己填
+            const container = enemyBenchContainer.querySelector('.bench-container');
+            if (container) container.innerHTML = '';
+            
+            // 插入到我方备选池后面
+            myBench.parentNode.insertBefore(enemyBenchContainer, myBench.nextSibling);
+        }
+
+        const enemyContainer = enemyBenchContainer.querySelector('.bench-container');
+        if (!enemyContainer) return;
+
+        // 如果敌方数据为空，清空图标
+        if (!benchIds || benchIds.length === 0) {
+            enemyContainer.innerHTML = '';
             return;
         }
-        
-        const enemyPlayers = opponent.enemyTeam.filter(p => p.championId || p.championPickIntent);
 
-        if (enemyPlayers.length === 0) {
+        // 防止重复渲染
+        const currentSig = JSON.stringify(benchIds);
+        if (enemyContainer.getAttribute('data-sig') === currentSig) return;
+        enemyContainer.setAttribute('data-sig', currentSig);
+
+        enemyContainer.innerHTML = '';
+
+        // 渲染敌方的备选图标（照着原版结构生成）
+        benchIds.forEach(cid => {
+            const item = document.createElement('div');
+            item.className = 'champion-bench-item ember-view';
+            item.innerHTML = `
+                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box;">
+                    <div style="background-image: url('/lol-game-data/assets/v1/champion-icons/${cid}.png');" class="bench-champion-background"></div>
+                </div>
+            `;
+            enemyContainer.appendChild(item);
+        });
+    }
+
+    function renderOpponent(opponent) {
+        if (!opponent) return;
+
+        // 处理敌方英雄显示
+        if (opponent.enemyTeam && opponent.enemyTeam.length > 0) {
+            const enemyPlayers = opponent.enemyTeam.filter(p => p.championId || p.championPickIntent);
+            const sig = JSON.stringify(enemyPlayers);
+            
+            if (sig !== lastOpponentSig && enemyPlayers.length > 0) {
+                lastOpponentSig = sig;
+                clearInjected();
+                
+                const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
+                if (enemyObjects.length > 0) {
+                    enemyPlayers.forEach((p, index) => {
+                        if (index >= enemyObjects.length) return;
+                        const obj = enemyObjects[index];
+                        const cid = p.championId || p.championPickIntent;
+                        applyChampionToObject(obj, cid, !!p.championId);
+                    });
+                }
+            }
+            updateIconStatus(true);
+        } else {
             updateIconStatus(false);
             clearInjected();
-            return;
         }
 
-        const sig = JSON.stringify(enemyPlayers);
-        if (sig === lastOpponentSig) return;
-        lastOpponentSig = sig;
-
-        clearInjected();
-        
-        const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
-        if (enemyObjects.length === 0) return;
-
-        enemyPlayers.forEach((p, index) => {
-            if (index >= enemyObjects.length) return;
-            const obj = enemyObjects[index];
-            const cid = p.championId || p.championPickIntent;
-            applyChampionToObject(obj, cid, !!p.championId);
-        });
-        
-        updateIconStatus(true);
-        console.log('[OpponentDisplay] 对方数据已同步刷新', enemyPlayers);
+        // 🚨 处理敌方备选池显示
+        if (opponent.enemyBench) {
+            renderEnemyBench(opponent.enemyBench);
+        } else {
+            renderEnemyBench([]);
+        }
     }
 
     async function poll() {
@@ -274,7 +341,7 @@
             }
         } else {
             if (injectedNodes.size > 0) clearInjected();
-            if (floatingIcon) removeFloatingIcon();
+            if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
             
             if (phase === 'InProgress' || phase === 'EndOfGame' || phase === 'None') {
                 partyId = null;
