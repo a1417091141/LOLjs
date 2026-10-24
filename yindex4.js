@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (终极稳定版)
-// @version      10.4.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美最终版)
+// @version      10.6.0
 // ==/PenguLoader==
 
 (function () {
@@ -211,18 +211,18 @@
     }
 
     function renderOpponent(opponent) {
-        // 🚨 现在 PHP 已经完美把敌方分出来了，直接拿 enemyTeam！
-        if (!opponent || !opponent.enemyTeam) {
+        // 🚨 核心保障：只有服务器返回了准确划分的敌方数据才渲染
+        if (!opponent || !opponent.enemyTeam || opponent.enemyTeam.length === 0) {
             updateIconStatus(false);
+            clearInjected(); // 如果对面没开插件，清空所有注入，绝不显示队友
             return;
         }
         
-        const enemyPlayers = opponent.enemyTeam
-            .filter(p => p.championId || p.championPickIntent)
-            .sort((a, b) => a.cellId - b.cellId);
+        const enemyPlayers = opponent.enemyTeam.filter(p => p.championId || p.championPickIntent);
 
         if (enemyPlayers.length === 0) {
             updateIconStatus(false);
+            clearInjected();
             return;
         }
 
@@ -269,6 +269,7 @@
                     renderOpponent(opponent);
                 } else {
                     updateIconStatus(false);
+                    clearInjected();
                 }
             }
         } else {
