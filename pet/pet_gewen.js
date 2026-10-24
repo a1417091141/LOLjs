@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 格温宠物 (DataStore持久化版)
+// @name         3D 格温宠物 (防误杀版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      19.0.0
+// @version      20.0.0
 // ==/UserScript==
 
 (function () {
@@ -56,7 +56,6 @@
 
         const THREE = window.THREE;
         
-        // 🚨 核心：直接从 DataStore 读取保存的配置
         let savedConfig = null;
         try {
             const allConfigs = DataStore.get('pet_all_configs', {});
@@ -102,7 +101,6 @@
         loadPet();
         animate(THREE);
 
-        // 实时参数更新接口
         window.updatePetConfig = function() {
             if (!camera || !modelGroup) return;
             let currentCfg = window.petConfig;
@@ -124,7 +122,6 @@
             }
         };
 
-        // 显隐控制接口
         window.togglePetVisibility = function(isVisible) {
             if (!container) return;
             if (isVisible) {
@@ -138,7 +135,6 @@
             }
         };
         
-        // 初始化检查总开关状态
         const globalEnabled = DataStore.get('pet_global_enabled', true);
         if (!globalEnabled) {
             container.style.display = 'none';
@@ -192,7 +188,6 @@
                 startIdleEasterEgg(); 
             }
             
-            // 🚨 强制应用保存的参数
             let savedCfg = window.petConfig;
             try {
                 const all = DataStore.get('pet_all_configs', {});
@@ -350,7 +345,6 @@
     function animate(THREE) {
         window.currentAnimFrameId = requestAnimationFrame(() => animate(THREE));
         
-        // 🚨 帧率从 DataStore 读取
         let targetFps = 30;
         try {
             const all = DataStore.get('pet_all_configs', {});
@@ -382,17 +376,27 @@
     };
 
     function safeStart() {
+        // 强制检测大厅元素是否出现
+        const isReady = document.querySelector('.client-root') || document.querySelector('.parties-game-navs');
+        if (!isReady) {
+            setTimeout(safeStart, 1000);
+            return;
+        }
         if (document.getElementById('three-pet-container')) return;
         initEngine();
     }
 
     window.addEventListener('spawn_pet', function(e) {
-        if (e.detail === CONF.name) safeStart();
+        if (e.detail === CONF.name) {
+            const old = document.getElementById('three-pet-container');
+            if (old) old.remove();
+            safeStart();
+        }
     });
 
     const savedPet = DataStore.get('pet_current_model', 'yasuo');
     if (!savedPet || savedPet === CONF.name) {
-        setTimeout(safeStart, 3000);
+        setTimeout(safeStart, 2000);
     }
 
 })();
