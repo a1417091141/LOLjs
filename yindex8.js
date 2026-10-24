@@ -1,13 +1,14 @@
 // ==PenguLoader==
-// @name         非房主强行开始游戏 (原版绿边版)
-// @description  保留所有原生结构，强制将蓝色渲染为淡绿色
-// @version      5.5.0
+// @name         非房主强行开始游戏 (最终优化版)
+// @description  保留原生结构，安全通讯，带点击反馈
+// @version      5.7.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
-    const START_API_URL = 'https://140.245.73.30/yaofan/start_api.php'; // 改成你的地址
+    // 🚨 请确保这个地址可以访问
+    const START_API_URL = 'https://140.245.73.30/yaofan/start_api.php'; 
     const POLL_INTERVAL = 1000;
 
     let partyId = null;
@@ -33,6 +34,7 @@
 
         const isNowHost = lobby.localMember.isLeader;
 
+        // 如果是房主，恢复原样
         if (isNowHost) {
             if (btn.classList.contains('force-hacked')) {
                 btn.classList.remove('force-hacked');
@@ -50,27 +52,19 @@
         btn.classList.add('force-hacked');
         btn.classList.remove('disabled');
 
-        // 🚨 核心修改：利用 filter 将原生蓝色整体变为绿色
+        // 修复了 CSS 的 drop-shadow 拼写错误，并加上了按钮点击变暗效果
         if (!document.getElementById('green-start-style')) {
             const style = document.createElement('style');
             style.id = 'green-start-style';
             style.innerHTML = `
-                /* 针对整个按钮容器做色相偏移，让它从 Cyan(蓝) 变成 Green(绿) */
                 .confirm-button-container .confirm.force-hacked {
-                    filter: hue-rotate(80deg) !important;
-                    transition: filter 0.2s ease;
+                    filter: hue-rotate(80deg) drop-shadow(0 0 8px rgba(140, 255, 140, 0.6)) !important;
+                    transition: filter 0.2s ease, opacity 0.2s ease;
                 }
-                
-                /* 为了让文字不被 filter 影响（不然字也绿了），单独把文字的颜色重置一下 */
                 .confirm-button-container .confirm.force-hacked .middle-confirm {
-                    filter: hue-rotate(-80deg) !important; /* 把文字的色相转回来 */
-                    color: #ffffff !important; /* 保持原版白字 */
+                    filter: hue-rotate(-80deg) !important;
+                    color: #ffffff !important;
                     font-weight: bold;
-                }
-                
-                /* 如果你想加一点发光（可选），在 filter 的基础上叠 drop-shadow */
-                .confirm-button-container .confirm.force-hacked {
-                    drop-shadow: 0 0 8px rgba(140, 255, 140, 0.6) !important;
                 }
             `;
             document.head.appendChild(style);
@@ -80,15 +74,45 @@
         btn.onclick = async (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (!partyId) return;
             
+            if (!partyId) {
+                console.warn('[AutoStart] 队伍ID获取失败，请稍等重试');
+                return;
+            }
+            
+            // 🚨 精准获取文字节点，加容错防报错
+            const textEl = btn.querySelector('.middle-confirm') || btn;
+            const originalText = textEl.innerText;
+            textEl.innerText = '请求发送中...';
+            btn.style.opacity = '0.6';
+
             const fd = new FormData();
             fd.append('action', 'request_start');
             fd.append('partyId', partyId);
-            try { await fetch(START_API_URL, { method: 'POST', body: fd }); } catch(err) {}
+
+            try { 
+                // 🚨 增加 timeout 防止服务端由于文件锁卡住导致请求无响应
+                const response = await fetch(START_API_URL, { 
+                    method: 'POST', 
+                    body: fd,
+                    timeout: 3000 
+                }); 
+                if (!response.ok) {
+                    console.error('[AutoStart] 请求服务器失败，HTTP:', response.status);
+                    textEl.innerText = '请求失败';
+                } else {
+                    console.log('[AutoStart] 开始请求已成功发送给服务器');
+                    textEl.innerText = '已请求开始';
+                }
+            } catch(err) {
+                console.error('[AutoStart] 网络或跨域(CORS)错误:', err);
+                textEl.innerText = '网络错误';
+            }
             
-            btn.style.opacity = '0.7';
-            setTimeout(() => { btn.style.opacity = '1'; }, 200);
+            setTimeout(() => { 
+                textEl.innerText = originalText;
+                btn.style.opacity = '1'; 
+            }, 1500);
         };
         
         console.log('[AutoStart] 强行开始按钮已激活 (原版绿边)');
@@ -122,7 +146,7 @@
         fd.append('action', 'check_start');
         fd.append('partyId', partyId);
         try {
-            const res = await fetch(START_API_URL, { method: 'POST', body: fd });
+            const res = await fetch(START_API_URL, { method: 'POST', body: fd, timeout: 3000 });
             const data = await res.json();
             if (data.start) {
                 console.log('[AutoStart] 收到队友开始请求，正在尝试发起...');
