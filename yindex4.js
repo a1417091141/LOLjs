@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美版)
-// @version      10.0.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美修复版)
+// @version      10.1.0
 // ==/PenguLoader==
 
 (function () {
@@ -66,6 +66,7 @@
 
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
+        // 上传我方全部数据（包含 cellId 以便区分敌我）
         const players = (session.myTeam || []).map(p => ({
             puuid: p.puuid,
             cellId: p.cellId,
@@ -210,13 +211,20 @@
     }
 
     function renderOpponent(opponent) {
-        // 🚨 现在 PHP 已经返回标准的 {"players": [...]} 了，直接读
         if (!opponent || !opponent.players) return;
         
-        const finalPlayers = opponent.players.filter(p => p.championId || p.championPickIntent);
+        // 🚨 核心修复：只提取 cellId >= 5（敌方队伍）的玩家，并按楼层顺序排好
+        const enemyPlayers = opponent.players
+            .filter(p => p.cellId >= 5 && (p.championId || p.championPickIntent))
+            .sort((a, b) => a.cellId - b.cellId);
 
-        const sig = JSON.stringify(finalPlayers);
-        if (sig === lastOpponentSig || finalPlayers.length === 0) return;
+        if (enemyPlayers.length === 0) {
+            updateIconStatus(false);
+            return;
+        }
+
+        const sig = JSON.stringify(enemyPlayers);
+        if (sig === lastOpponentSig) return;
         lastOpponentSig = sig;
 
         clearInjected();
@@ -224,7 +232,8 @@
         const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
         if (enemyObjects.length === 0) return;
 
-        finalPlayers.forEach((p, index) => {
+        // 按楼层依次填装敌方数据
+        enemyPlayers.forEach((p, index) => {
             if (index >= enemyObjects.length) return;
             const obj = enemyObjects[index];
             const cid = p.championId || p.championPickIntent;
@@ -232,7 +241,7 @@
         });
         
         updateIconStatus(true);
-        console.log('[OpponentDisplay] 对方数据已同步刷新');
+        console.log('[OpponentDisplay] 对方数据已同步刷新', enemyPlayers);
     }
 
     async function poll() {
