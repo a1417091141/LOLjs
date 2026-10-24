@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (官方 UI 植入版)
-// @version      11.1.0
+// @description  在选人界面显示对方英雄及备选池 (实时透视完全体)
+// @version      11.2.0
 // ==/PenguLoader==
 
 (function () {
@@ -20,7 +20,7 @@
     const injectedNodes = new Set();
     
     let floatingIcon = null;
-    let enemyBenchContainer = null; // 🚨 用来存放官方风格敌方备选池的容器
+    let enemyBenchContainer = null;
 
     async function lcuGet(path) {
         try {
@@ -64,7 +64,6 @@
         }
     }
 
-    // 上传数据（增加备选池）
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
         
@@ -223,48 +222,45 @@
         }
     }
 
-    // 🚨 核心：在原版备选池下方克隆一个敌方备选池
+    // 🚨 核心：实时显示敌方备选池（固定显示框体）
     function renderEnemyBench(benchIds) {
-        // 查找原版的我方备选池主容器
         const myBench = document.querySelector('.champion-bench.ember-view');
         if (!myBench) return;
 
-        // 如果还没创建，就在原版后面插入一个结构一模一样的克隆体
         if (!enemyBenchContainer) {
             enemyBenchContainer = myBench.cloneNode(true);
             enemyBenchContainer.id = 'enemy-bench-display';
-            // 修改标签文字
             const label = enemyBenchContainer.querySelector('.bench-label');
             if (label) {
                 label.innerHTML = '敌方可用';
-                label.style.color = '#E74C3C'; // 改成红色醒目标识
+                label.style.color = '#E74C3C';
                 label.style.textShadow = '0 0 5px rgba(231, 76, 60, 0.5)';
             }
-            // 隐藏掉原本克隆过来的图标，稍后我们自己填
             const container = enemyBenchContainer.querySelector('.bench-container');
             if (container) container.innerHTML = '';
             
-            // 插入到我方备选池后面
             myBench.parentNode.insertBefore(enemyBenchContainer, myBench.nextSibling);
+            
+            enemyBenchContainer.style.display = 'block';
+            enemyBenchContainer.style.marginTop = '10px';
         }
 
         const enemyContainer = enemyBenchContainer.querySelector('.bench-container');
         if (!enemyContainer) return;
 
-        // 如果敌方数据为空，清空图标
+        // 没换人就清空，保留框体
         if (!benchIds || benchIds.length === 0) {
             enemyContainer.innerHTML = '';
+            enemyContainer.removeAttribute('data-sig');
             return;
         }
 
-        // 防止重复渲染
         const currentSig = JSON.stringify(benchIds);
         if (enemyContainer.getAttribute('data-sig') === currentSig) return;
         enemyContainer.setAttribute('data-sig', currentSig);
 
         enemyContainer.innerHTML = '';
 
-        // 渲染敌方的备选图标（照着原版结构生成）
         benchIds.forEach(cid => {
             const item = document.createElement('div');
             item.className = 'champion-bench-item ember-view';
@@ -280,7 +276,6 @@
     function renderOpponent(opponent) {
         if (!opponent) return;
 
-        // 处理敌方英雄显示
         if (opponent.enemyTeam && opponent.enemyTeam.length > 0) {
             const enemyPlayers = opponent.enemyTeam.filter(p => p.championId || p.championPickIntent);
             const sig = JSON.stringify(enemyPlayers);
@@ -305,7 +300,7 @@
             clearInjected();
         }
 
-        // 🚨 处理敌方备选池显示
+        // 处理敌方备选池
         if (opponent.enemyBench) {
             renderEnemyBench(opponent.enemyBench);
         } else {
