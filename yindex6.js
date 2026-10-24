@@ -1,7 +1,7 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (完美自定义检测版)
+// @name         海克斯自动选人 (重开修复版)
 // @description  适配LOL原生风格，DataStore持久化，完美兼容国服海克斯大乱斗 (3270)
-// @version      414.4.0
+// @version      415.0.0
 // ==/PenguLoader==
 
 (function () {
@@ -11,13 +11,13 @@
     const KEY_ENABLED = 'auto_pick_enabled';
     const KEY_FALLBACK = 'auto_pick_fallback';
     const KEY_PRIORITY = 'auto_pick_priority';
-    const KEY_CUSTOM_ONLY = 'auto_pick_custom_only'; 
+    const KEY_CUSTOM_ONLY = 'auto_pick_custom_only';
 
     let isEnabled = DataStore.get(KEY_ENABLED, false);
     let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
     let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
-    
-    let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true; 
+
+    let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true;
 
     let allChampions = [];
     let checkTimer = null;
@@ -28,7 +28,11 @@
     const WUKONG_ID = 62;
     let swapTargetId = null;
     let lastSwapAttemptTime = 0;
-    let isCustomGame = false; 
+    let isCustomGame = false;
+
+    // 🚨 重开修复：跨局状态检测
+    let lastSessionKey = null;
+    let fallbackPickId = null;
 
     // ===== 2. 英雄数据加载 =====
     const DATA_API_ORIGIN = "https://data.dtodo.cn";
@@ -124,7 +128,7 @@
             const panel = document.createElement('div');
             panel.id = 'augment-auto-pick-panel';
             panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
-            
+
             panel.innerHTML = `
                 <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
@@ -176,7 +180,7 @@
                 fallbackStrategy = e.target.value;
                 DataStore.set(KEY_FALLBACK, fallbackStrategy);
             };
-            
+
             const customCheckbox = document.getElementById('custom-only-checkbox');
             customCheckbox.onchange = (e) => {
                 customOnly = e.target.checked;
@@ -286,20 +290,44 @@
     // ===== 5. 核心引擎 =====
     async function runEngine() {
         if (!isEnabled) return;
-        
+
         try {
             const res = await fetch('/lol-champ-select/v1/session');
             if (!res.ok) return;
             const session = await res.json();
             if (!session.benchEnabled) return;
 
-            // 🚨 核心修复：直接把国服 3270 加入白名单，同时兼容 KIWI 游戏模式
+            // 🚨 重开修复 1：用 session 身份特征检测新一局，不依赖轮询是否采到非 ChampSelect
+            const sessionKey = [
+                session.gameId,
+                session.chatDetails && session.chatDetails.gameId,
+                session.queueId,
+                session.localPlayerCellId,
+                (session.actions || []).map(a => a.id).join(','),   // 每局唯一
+                (session.myTeam || []).map(p => p.cellId).join(',')
+            ].join('|');
+
+            if (sessionKey !== lastSessionKey) {
+                lastSessionKey = sessionKey;
+                hasLockedInitial = false;
+                hasSwappedOnce = false;
+                swapTargetId = null;
+                isCustomGame = false;
+                fallbackPickId = null;
+            }
+
+            // 🚨 重开修复 2：queueId 未就绪时不误判
             const queueId = session.queueId;
             const isKiwi = (session.gameMode === 'KIWI');
-            
-            isCustomGame = [0, 1700, 1710, 3100, 3130, 3270].includes(queueId) || isKiwi || session.isCustomGame === true;
+            const knownCustomQueues = [0, 1700, 1710, 3100, 3130, 3270];
+            const queueReady = queueId !== undefined && queueId !== null;
+
+            isCustomGame = (queueReady && knownCustomQueues.includes(queueId))
+                || isKiwi
+                || session.isCustomGame === true;
 
             if (customOnly && !isCustomGame) {
+                if (!queueReady && !isKiwi && session.isCustomGame === undefined) return; // 数据未就绪，等下一轮
                 return;
             }
 
@@ -307,22 +335,23 @@
             const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
             if (!myPlayer) return;
 
+            // 🚨 重开修复 3：offered 补全前置，避免"重置后第一轮数据未就绪"直接 return
             let offered = [];
             if (Array.isArray(session.benchChampions) && session.benchChampions.length > 0) {
                 offered = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
             }
+            if (offered.length === 0) {
+                try {
+                    const subsetRes = await fetch('/lol-lobby-team-builder/champ-select/v1/subset-champion-list');
+                    if (subsetRes.ok) offered = await subsetRes.json();
+                } catch (e) {}
+            }
+            if (!offered || offered.length === 0) return;
 
-            if (!hasLockedInitial) {
-                if (offered.length === 0) {
-                    try {
-                        const subsetRes = await fetch('/lol-lobby-team-builder/champ-select/v1/subset-champion-list');
-                        if (subsetRes.ok) offered = await subsetRes.json();
-                    } catch (e) {}
-                }
-                if (!offered || offered.length === 0) return;
+            // 🚨 重开修复 4：秒选条件加 myActions.length > 0 联合判断
+            const myActions = (session.actions || []).flat().filter(a => a.actorCellId === myCellId && a.type === 'pick' && !a.completed);
 
-                const myActions = (session.actions || []).flat().filter(a => a.actorCellId === myCellId && a.type === 'pick' && !a.completed);
-                if (myActions.length === 0) return;
+            if (!hasLockedInitial && myActions.length > 0) {
                 const action = myActions[0];
 
                 let bestId = null;
@@ -335,8 +364,15 @@
 
                 if (bestId === null) {
                     if (fallbackStrategy === 'none') return;
-                    else if (fallbackStrategy === 'random') bestId = offered[Math.floor(Math.random() * offered.length)];
-                    else if (fallbackStrategy === 'rightmost') bestId = offered[offered.length - 1];
+                    else if (fallbackStrategy === 'random') {
+                        // 🚨 重开修复 5：随机同局固定，不反复横跳
+                        if (fallbackPickId === null || !offered.includes(fallbackPickId)) {
+                            fallbackPickId = offered[Math.floor(Math.random() * offered.length)];
+                        }
+                        bestId = fallbackPickId;
+                    } else if (fallbackStrategy === 'rightmost') {
+                        bestId = offered[offered.length - 1];
+                    }
                 }
 
                 const lockRes = await fetch(`/lol-champ-select/v1/session/actions/${action.id}`, {
@@ -394,11 +430,13 @@
     // ===== 启动 =====
     const init = async () => {
         loadAllChampions();
+
+        // 🚨 重开修复：轮询 1s → 250ms，提高采到"退出选人瞬态"的概率（辅助，根治靠 sessionKey）
         setInterval(async () => {
             try {
                 const phaseRes = await fetch('/lol-gameflow/v1/gameflow-phase');
                 const phase = await phaseRes.json();
-                
+
                 if (phase === 'ChampSelect') {
                     if (!checkTimer) {
                         checkTimer = setInterval(runEngine, 300);
@@ -408,10 +446,13 @@
                         clearInterval(checkTimer);
                         checkTimer = null;
                     }
+                    // 兜底重置（主要重置靠 runEngine 内 sessionKey 检测）
                     hasLockedInitial = false;
                     hasSwappedOnce = false;
                     swapTargetId = null;
-                    isCustomGame = false; 
+                    isCustomGame = false;
+                    lastSessionKey = null;      // ← 保证下次进 ChampSelect 必触发 key 变化
+                    fallbackPickId = null;
                 }
 
                 if (phase === 'Lobby' || phase === 'Matchmaking') {
@@ -422,7 +463,7 @@
                     if (panel) panel.style.display = 'none';
                 }
             } catch (e) {}
-        }, 1000);
+        }, 500);
     };
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
