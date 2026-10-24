@@ -145,7 +145,7 @@
         const THREE = window.THREE;
         const loader = new THREE.GLTFLoader();
 
-        loader.load(CONF.url, (gltf) => {
+        loader.load((window.getPetModelUrl ? await window.getPetModelUrl(CONF.name) : CONF.url), (gltf) => {
             if (petModel) {
                 scene.remove(petModel.parent);
             }
