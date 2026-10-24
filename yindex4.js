@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (完美修复版)
-// @version      10.2.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (终极分离版)
+// @version      10.3.0
 // ==/PenguLoader==
 
 (function () {
@@ -20,7 +20,6 @@
     const injectedNodes = new Set();
     
     let floatingIcon = null;
-    let myTeamPuuid = new Set(); // 🚨 新增：记录我方所有成员的 puuid，用于区分敌我
 
     async function lcuGet(path) {
         try {
@@ -68,10 +67,6 @@
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
         
-        // 🚨 核心修复1：每次上传时，更新我方队伍名单
-        myTeamPuuid.clear();
-        (session.myTeam || []).forEach(p => myTeamPuuid.add(p.puuid));
-
         const players = (session.myTeam || []).map(p => ({
             puuid: p.puuid,
             cellId: p.cellId,
@@ -216,12 +211,15 @@
     }
 
     function renderOpponent(opponent) {
-        if (!opponent || !opponent.players) return;
+        // 🚨 核心修复：PHP 已经帮我们分离好敌方数据了，直接读 enemyTeam
+        if (!opponent || !opponent.enemyTeam) {
+            updateIconStatus(false);
+            return;
+        }
         
-        // 🚨 核心修复2：只要对方的 puuid 不在我方名单里，就是敌人
-        const enemyPlayers = opponent.players
-            .filter(p => !myTeamPuuid.has(p.puuid) && (p.championId || p.championPickIntent))
-            .sort((a, b) => a.cellId - b.cellId); // 按他视角的楼层排序
+        const enemyPlayers = opponent.enemyTeam
+            .filter(p => p.championId || p.championPickIntent)
+            .sort((a, b) => a.cellId - b.cellId);
 
         if (enemyPlayers.length === 0) {
             updateIconStatus(false);
@@ -237,7 +235,6 @@
         const enemyObjects = Array.from(document.querySelectorAll('.summoner-object.right'));
         if (enemyObjects.length === 0) return;
 
-        // 按顺序填入对面
         enemyPlayers.forEach((p, index) => {
             if (index >= enemyObjects.length) return;
             const obj = enemyObjects[index];
@@ -268,7 +265,7 @@
                 if (partyId && myPuuid) await uploadMyTeam(session);
 
                 const opponent = await fetchOpponent();
-                if (opponent && opponent.players) {
+                if (opponent) {
                     renderOpponent(opponent);
                 } else {
                     updateIconStatus(false);
@@ -282,7 +279,6 @@
                 partyId = null;
                 lastUploadSig = '';
                 lastOpponentSig = '';
-                myTeamPuuid.clear(); // 重置名单
             }
         }
     }
