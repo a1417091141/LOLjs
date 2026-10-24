@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 亚索宠物 (持久化读取版)
+// @name         3D 亚索宠物 (DataStore持久化版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      18.0.0
+// @version      19.0.0
 // ==/UserScript==
 
 (function () {
@@ -56,10 +56,10 @@
 
         const THREE = window.THREE;
         
-        // 🚨 强制读取本地保存的配置
+        // 🚨 直接从 DataStore 读取保存的配置
         let savedConfig = null;
         try {
-            const allConfigs = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+            const allConfigs = DataStore.get('pet_all_configs', {});
             savedConfig = allConfigs[CONF.name];
         } catch (e) {}
         
@@ -106,7 +106,7 @@
             if (!camera || !modelGroup) return;
             let currentCfg = window.petConfig;
             try {
-                const all = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+                const all = DataStore.get('pet_all_configs', {});
                 if (all[CONF.name]) currentCfg = all[CONF.name];
             } catch(e) {}
 
@@ -136,7 +136,7 @@
             }
         };
         
-        const globalEnabled = localStorage.getItem('pet_global_enabled') !== 'false';
+        const globalEnabled = DataStore.get('pet_global_enabled', true);
         if (!globalEnabled) {
             container.style.display = 'none';
         }
@@ -189,10 +189,10 @@
                 startIdleEasterEgg(); 
             }
             
-            // 🚨 强制应用已保存的参数
+            // 🚨 强制应用保存的参数
             let savedCfg = window.petConfig;
             try {
-                const all = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+                const all = DataStore.get('pet_all_configs', {});
                 if (all[CONF.name]) savedCfg = all[CONF.name];
             } catch(e) {}
             
@@ -347,7 +347,13 @@
     function animate(THREE) {
         window.currentAnimFrameId = requestAnimationFrame(() => animate(THREE));
         
-        const targetFps = (window.petConfig && window.petConfig.fps) ? window.petConfig.fps : 30;
+        let targetFps = 30;
+        try {
+            const all = DataStore.get('pet_all_configs', {});
+            if (all[CONF.name] && all[CONF.name].fps) targetFps = all[CONF.name].fps;
+        } catch(e) {}
+        if (window.petConfig && window.petConfig.fps) targetFps = window.petConfig.fps;
+        
         const frameInterval = 1000 / targetFps;
         
         const now = performance.now();
@@ -380,7 +386,7 @@
         if (e.detail === CONF.name) safeStart();
     });
 
-    const savedPet = localStorage.getItem('pet_current_model');
+    const savedPet = DataStore.get('pet_current_model', 'yasuo');
     if (!savedPet || savedPet === CONF.name) {
         setTimeout(safeStart, 3000);
     }
