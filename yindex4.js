@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (全队同步强力去重版)
-// @version      11.5.0
+// @description  在选人界面显示对方英雄及备选池 (横向完美排列版)
+// @version      11.6.0
 // ==/PenguLoader==
 
 (function () {
@@ -222,23 +222,20 @@
         }
     }
 
-    // 🚨 核心：动态侦测敌方备选池（全队合并去重版）
+    // 🚨 核心：横向完美排列的敌方备选池
     function renderEnemyBench(benchIds) {
         const myBench = document.querySelector('.champion-bench.ember-view');
         if (!myBench) return;
 
-        // 1. 没数据则隐藏
+        // 没数据则隐藏
         if (!benchIds || benchIds.length === 0) {
-            if (enemyBenchContainer) {
-                enemyBenchContainer.style.display = 'none';
-            }
+            if (enemyBenchContainer) enemyBenchContainer.style.display = 'none';
             return;
         }
 
-        // 2. 去重：因为备选池是全队共享的，对面如果 5 个人都开插件，会传来 5 个相同的池子
+        // 去重
         const uniqueBenchIds = [...new Set(benchIds)];
 
-        // 3. 检查框体是否存在，不存在则克隆
         if (!enemyBenchContainer || !enemyBenchContainer.parentNode) {
             enemyBenchContainer = myBench.cloneNode(true);
             enemyBenchContainer.id = 'enemy-bench-display';
@@ -249,7 +246,13 @@
                 label.style.textShadow = '0 0 5px rgba(231, 76, 60, 0.5)';
             }
             const container = enemyBenchContainer.querySelector('.bench-container');
-            if (container) container.innerHTML = '';
+            if (container) {
+                container.innerHTML = '';
+                container.style.display = 'flex'; // 保持横向排列
+                container.style.flexDirection = 'row';
+                container.style.flexWrap = 'wrap';
+                container.style.gap = '5px';
+            }
             
             myBench.parentNode.insertBefore(enemyBenchContainer, myBench.nextSibling);
             enemyBenchContainer.style.marginTop = '10px';
@@ -266,11 +269,15 @@
 
         enemyContainer.innerHTML = '';
 
+        // 直接平铺，一模一样
         uniqueBenchIds.forEach(cid => {
             const item = document.createElement('div');
             item.className = 'champion-bench-item ember-view';
+            // 保持和官方完全一致的尺寸
+            item.style.width = '48px';
+            item.style.height = '48px';
             item.innerHTML = `
-                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box; background-color: #000;">
+                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box; background-color: #000; width: 48px; height: 48px;">
                     <div style="background-image: url('/lol-game-data/assets/v1/champion-icons/${cid}.png'); width: 100%; height: 100%; background-size: cover; border-radius: 50%;"></div>
                 </div>
             `;
