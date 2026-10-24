@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (终极分离版)
-// @version      10.3.0
+// @description  在选人界面显示对方英雄，带有实时透视悬浮图标 (终极稳定版)
+// @version      10.4.0
 // ==/PenguLoader==
 
 (function () {
@@ -211,7 +211,7 @@
     }
 
     function renderOpponent(opponent) {
-        // 🚨 核心修复：PHP 已经帮我们分离好敌方数据了，直接读 enemyTeam
+        // 🚨 现在 PHP 已经完美把敌方分出来了，直接拿 enemyTeam！
         if (!opponent || !opponent.enemyTeam) {
             updateIconStatus(false);
             return;
