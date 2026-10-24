@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (gameId 彻底防残留版)
-// @version      12.1.0
+// @description  在选人界面显示对方英雄及备选池 (退出选人物理销毁版)
+// @version      12.4.0
 // ==/PenguLoader==
 
 (function () {
@@ -21,6 +21,7 @@
     
     let floatingIcon = null;
     let enemyBenchContainer = null;
+    let lastPhase = '';
 
     async function lcuGet(path) {
         try {
@@ -77,7 +78,7 @@
             bench = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
         }
 
-        const payload = { players: players, bench: bench, gameId: session.gameId };
+        const payload = { players: players, bench: bench };
         const currentSig = JSON.stringify(payload);
         if (currentSig === lastUploadSig) return;
         lastUploadSig = currentSig;
@@ -88,7 +89,6 @@
         formData.append('uploaderPuuid', myPuuid);
         formData.append('players', JSON.stringify(players));
         formData.append('bench', JSON.stringify(bench));
-        formData.append('gameId', session.gameId || '');
 
         try { await fetch(SERVER_BASE, { method: 'POST', body: formData }); } catch (e) {}
     }
@@ -106,6 +106,16 @@
             if (!res.ok) return null;
             return await res.json();
         } catch (e) { return null; }
+    }
+
+    // 🚨 通知服务器清理
+    async function clearServerData() {
+        if (!partyId) return;
+        const formData = new FormData();
+        formData.append('action', 'clear');
+        formData.append('partyId', partyId);
+        try { await fetch(SERVER_BASE, { method: 'POST', body: formData }); } catch (e) {}
+        console.log('[OpponentDisplay] 已通知服务器物理清空数据');
     }
 
     function createFloatingIcon() {
@@ -320,6 +330,15 @@
             await updatePartyId();
         }
 
+        // 🚨 核心触发：只要发现上一次是选人阶段，这次不是了，立刻通知服务器销毁数据！
+        if (lastPhase === 'ChampSelect' && phase !== 'ChampSelect') {
+            console.log('[OpponentDisplay] 🚨 检测到离开选人阶段，正在物理销毁服务器残留数据...');
+            clearServerData();
+            clearInjected();
+            if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
+        }
+        lastPhase = phase;
+
         if (phase === 'ChampSelect') {
             if (!floatingIcon) createFloatingIcon();
             const session = await lcuGet('/lol-champ-select/v1/session');
@@ -334,15 +353,7 @@
 
                 const opponent = await fetchOpponent();
                 if (opponent) {
-                    // 🚨 核心拦截：如果服务器记录的 gameId 和当前对局不一致，说明是旧数据！
-                    if (opponent.gameId && session.gameId && opponent.gameId !== session.gameId.toString()) {
-                        console.log(`[OpponentDisplay] 🚨 拦截上一局的旧数据...`);
-                        updateIconStatus(false);
-                        clearInjected();
-                        renderEnemyBench([]);
-                    } else {
-                        renderOpponent(opponent);
-                    }
+                    renderOpponent(opponent);
                 } else {
                     updateIconStatus(false);
                     clearInjected();
@@ -354,7 +365,6 @@
             if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
             
             if (phase === 'InProgress' || phase === 'EndOfGame' || phase === 'None') {
-                partyId = null;
                 lastUploadSig = '';
                 lastOpponentSig = '';
             }
