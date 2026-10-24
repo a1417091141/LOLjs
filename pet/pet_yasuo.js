@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         3D 亚索宠物 (帧率与视角优化版)
+// @name         3D 亚索宠物 (持久化读取版)
 // @namespace    pengu
 // @match        https://riot:*
 // @grant        none
-// @version      17.0.0
+// @version      18.0.0
 // ==/UserScript==
 
 (function () {
@@ -55,8 +55,15 @@
         await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js');
 
         const THREE = window.THREE;
-        // 亚索的默认参数，稍微高一点
-        const cfg = window.petConfig || { scale: 4.5, cameraZ: 6.5, cameraY: 1.5, ambientLight: 6, dirLight: 5, brightness: 1, hueRotate: 0, posX: 0, posY: 0, fps: 30 };
+        
+        // 🚨 强制读取本地保存的配置
+        let savedConfig = null;
+        try {
+            const allConfigs = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+            savedConfig = allConfigs[CONF.name];
+        } catch (e) {}
+        
+        const cfg = savedConfig || { scale: 4.5, posX: 0, posY: 0, cameraY: 1.5, cameraZ: 6.5, ambientLight: 6, dirLight: 5, brightness: 1, hueRotate: 0, fps: 30 };
 
         container = document.createElement('div');
         container.id = 'three-pet-container';
@@ -75,6 +82,7 @@
         renderer.setSize(350, 400);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         if(THREE.sRGBEncoding) renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.domElement.style.filter = `brightness(${cfg.brightness}) hue-rotate(${cfg.hueRotate}deg)`;
         container.appendChild(renderer.domElement);
 
         ambientLight = new THREE.AmbientLight(0xffffff, cfg.ambientLight); 
@@ -96,7 +104,11 @@
 
         window.updatePetConfig = function() {
             if (!camera || !modelGroup) return;
-            const currentCfg = window.petConfig;
+            let currentCfg = window.petConfig;
+            try {
+                const all = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+                if (all[CONF.name]) currentCfg = all[CONF.name];
+            } catch(e) {}
 
             camera.position.y = currentCfg.cameraY;
             camera.position.z = currentCfg.cameraZ;
@@ -111,7 +123,23 @@
             }
         };
 
-        renderer.domElement.style.filter = `brightness(${cfg.brightness}) hue-rotate(${cfg.hueRotate}deg)`;
+        window.togglePetVisibility = function(isVisible) {
+            if (!container) return;
+            if (isVisible) {
+                container.style.display = 'block';
+                if (idleTimer) clearInterval(idleTimer);
+                startIdleEasterEgg();
+                playAction(cfg.idleAnim || CONF.idle);
+            } else {
+                container.style.display = 'none';
+                if (idleTimer) clearInterval(idleTimer);
+            }
+        };
+        
+        const globalEnabled = localStorage.getItem('pet_global_enabled') !== 'false';
+        if (!globalEnabled) {
+            container.style.display = 'none';
+        }
     }
 
     function loadPet() {
@@ -154,8 +182,6 @@
                     actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
                 });
                 
-                window.currentPetActions = Object.keys(actions);
-                
                 const cfg = window.petConfig || {};
                 const actualIdle = cfg.idleAnim || CONF.idle;
                 playAction(actualIdle);
@@ -163,9 +189,25 @@
                 startIdleEasterEgg(); 
             }
             
-            if(window.petConfig) {
-                modelGroup.scale.set(window.petConfig.scale, window.petConfig.scale, window.petConfig.scale);
-                modelGroup.position.set(window.petConfig.posX, window.petConfig.posY, 0);
+            // 🚨 强制应用已保存的参数
+            let savedCfg = window.petConfig;
+            try {
+                const all = JSON.parse(localStorage.getItem('pet_all_configs') || '{}');
+                if (all[CONF.name]) savedCfg = all[CONF.name];
+            } catch(e) {}
+            
+            if (savedCfg) {
+                modelGroup.scale.set(savedCfg.scale, savedCfg.scale, savedCfg.scale);
+                modelGroup.position.set(savedCfg.posX, savedCfg.posY, 0);
+                if (camera) {
+                    camera.position.y = savedCfg.cameraY || 1.5;
+                    camera.position.z = savedCfg.cameraZ || 6.5;
+                }
+                if (ambientLight) ambientLight.intensity = savedCfg.ambientLight;
+                if (dirLight) dirLight.intensity = savedCfg.dirLight;
+                if (renderer) {
+                    renderer.domElement.style.filter = `brightness(${savedCfg.brightness}) hue-rotate(${savedCfg.hueRotate}deg)`;
+                }
             }
         }, undefined, (error) => {
             console.error(`[Pet] ${CONF.name} 加载失败:`, error);
@@ -199,7 +241,6 @@
             const actualIdle = cfg.idleAnim || CONF.idle;
 
             if (currentAction._clip.name.toLowerCase().includes(actualIdle)) {
-                // 亚索专属互动池
                 const interactPool = ['laugh', 'taunt', 'joke', 'dance', 'idle01', 'idle02'];
                 const availableEggs = Object.keys(actions).filter(name => 
                     interactPool.some(k => name.includes(k))
