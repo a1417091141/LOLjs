@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (退出选人物理销毁版)
-// @version      12.4.0
+// @description  在选人界面显示对方英雄及备选池 (全队监控无死角版)
+// @version      12.5.0
 // ==/PenguLoader==
 
 (function () {
@@ -13,7 +13,6 @@
     let myPuuid = null;
     let partyId = null;
     let lastOpponentSig = '';
-    let lastUploadSig = '';
     let pollTimer = null;
     let champMap = {};
     let champMapLoaded = false;
@@ -63,6 +62,7 @@
         }
     }
 
+    // 🚨 核心修改：取消防抖，强制每次都上传最新全队名单
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
         
@@ -77,11 +77,6 @@
         if (Array.isArray(session.benchChampions)) {
             bench = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
         }
-
-        const payload = { players: players, bench: bench };
-        const currentSig = JSON.stringify(payload);
-        if (currentSig === lastUploadSig) return;
-        lastUploadSig = currentSig;
 
         const formData = new FormData();
         formData.append('action', 'upload');
@@ -108,7 +103,6 @@
         } catch (e) { return null; }
     }
 
-    // 🚨 通知服务器清理
     async function clearServerData() {
         if (!partyId) return;
         const formData = new FormData();
@@ -330,9 +324,7 @@
             await updatePartyId();
         }
 
-        // 🚨 核心触发：只要发现上一次是选人阶段，这次不是了，立刻通知服务器销毁数据！
         if (lastPhase === 'ChampSelect' && phase !== 'ChampSelect') {
-            console.log('[OpponentDisplay] 🚨 检测到离开选人阶段，正在物理销毁服务器残留数据...');
             clearServerData();
             clearInjected();
             if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
@@ -349,6 +341,7 @@
                 
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
+                // 每 1.5 秒强制上传全队数据（防止挂机导致队友选人无法同步）
                 if (partyId && myPuuid) await uploadMyTeam(session);
 
                 const opponent = await fetchOpponent();
@@ -365,7 +358,6 @@
             if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
             
             if (phase === 'InProgress' || phase === 'EndOfGame' || phase === 'None') {
-                lastUploadSig = '';
                 lastOpponentSig = '';
             }
         }
