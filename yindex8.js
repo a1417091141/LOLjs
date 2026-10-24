@@ -1,7 +1,7 @@
 // ==PenguLoader==
-// @name         非房主强行开始游戏 (绝对原版)
-// @description  保留所有原生结构，强制将蓝色渲染为淡绿色
-// @version      5.9.0
+// @name         非房主强行开始游戏 (纯原生表单版)
+// @description  完美拦截客户端点击，使用标准表单发送
+// @version      6.1.0
 // ==/PenguLoader==
 
 (function () {
@@ -22,7 +22,7 @@
         } catch (e) { return null; }
     }
 
-    // ============ 核心：破解按钮 + 强制转绿 ============
+    // ============ 核心：遮盖层拦截 + 表单发送 ============
     async function hackStartButton() {
         const btn = document.querySelector('.confirm-button-container .confirm');
         if (!btn) return;
@@ -32,86 +32,98 @@
         if (!lobby || !lobby.localMember) return;
 
         const isNowHost = lobby.localMember.isLeader;
+        const overlayId = 'pet-start-overlay';
 
+        // 如果是房主，清理遮盖层并恢复
         if (isNowHost) {
             if (btn.classList.contains('force-hacked')) {
                 btn.classList.remove('force-hacked');
                 btn.classList.add('disabled');
-                btn.onclick = null;
+                const oldOverlay = document.getElementById(overlayId);
+                if (oldOverlay) oldOverlay.remove();
                 const styleEl = document.getElementById('green-start-style');
                 if (styleEl) styleEl.remove();
             }
             return; 
         }
 
-        // --- 非房主逻辑 ---
-        if (btn.classList.contains('force-hacked')) return;
+        // 如果已经加过遮盖层，直接跳过
+        if (document.getElementById(overlayId)) return;
 
+        // 1. 把按钮变绿
         btn.classList.add('force-hacked');
         btn.classList.remove('disabled');
-
-        // 🚨 彻底修复 CSS
         if (!document.getElementById('green-start-style')) {
             const style = document.createElement('style');
             style.id = 'green-start-style';
             style.innerHTML = `
                 .confirm-button-container .confirm.force-hacked {
                     filter: hue-rotate(80deg) !important;
-                    transition: filter 0.2s ease;
                 }
                 .confirm-button-container .confirm.force-hacked .middle-confirm {
                     filter: hue-rotate(-80deg) !important;
                     color: #ffffff !important; 
-                    font-weight: bold;
                 }
             `;
             document.head.appendChild(style);
         }
 
-        // 🚨 关键点：确保 onclick 能挂载成功
-        btn.onclick = async (e) => {
+        // 2. 创建透明遮盖层
+        const overlay = document.createElement('div');
+        overlay.id = overlayId;
+        overlay.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 99999; cursor: pointer;
+            background: transparent;
+        `;
+
+        const container = btn.closest('.confirm-button-container') || btn;
+        if (window.getComputedStyle(container).position === 'static') {
+            container.style.position = 'relative';
+        }
+        container.appendChild(overlay);
+
+        // 3. 在遮盖层上绑定点击
+        overlay.onclick = async (e) => {
             e.preventDefault();
             e.stopPropagation();
             
-            // 打印检查
-            console.log("========== [AutoStart] 按钮被点击了！ ==========");
+            console.log("========== [AutoStart] 遮罩层被点击了！ ==========");
             
             if (!partyId) {
-                console.warn('[AutoStart] 错误：partyId 为空，可能还没进入房间！');
+                console.warn('[AutoStart] 错误：partyId 为空，请稍等重试！');
                 return;
             }
 
-            // 文字反馈
-            const textEl = btn.querySelector('.middle-confirm') || btn;
-            const originalText = textEl.innerText;
-            textEl.innerText = '发送中...';
+            btn.style.opacity = '0.5';
 
-            const fd = new FormData();
-            fd.append('action', 'request_start');
-            fd.append('partyId', partyId);
+            // 🚨 核心修改：不用 FormData，改用 URLSearchParams 发送标准表单
+            const bodyData = new URLSearchParams();
+            bodyData.append('action', 'request_start');
+            bodyData.append('partyId', partyId);
             
             try { 
-                console.log('[AutoStart] 正在向服务器发送 POST 请求...');
-                // 原封不动的 fetch
-                const response = await fetch(START_API_URL, { method: 'POST', body: fd });
-                console.log('[AutoStart] 服务器响应状态码:', response.status);
+                console.log('[AutoStart] 正在发送 POST 到:', START_API_URL);
+                const res = await fetch(START_API_URL, { 
+                    method: 'POST', 
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: bodyData
+                }); 
                 
-                if (response.ok) {
-                    textEl.innerText = '已请求';
-                } else {
-                    textEl.innerText = '请求异常';
-                }
+                console.log('[AutoStart] 服务器响应码:', res.status);
+                const text = await res.text();
+                console.log('[AutoStart] 服务器返回内容:', text);
+                
             } catch(err) {
-                console.error('[AutoStart] fetch 网络报错:', err);
-                textEl.innerText = '网络错误';
+                console.error('[AutoStart] 网络错误:', err);
             }
             
-            setTimeout(() => { 
-                textEl.innerText = originalText;
-            }, 1500);
+            setTimeout(() => { btn.style.opacity = '1'; }, 1000);
         };
         
-        console.log('[AutoStart] 强行开始按钮已激活 (原版绿边)');
+        console.log('[AutoStart] 遮罩层已加载，强行开始就绪');
     }
 
     // ============ 轮询与主逻辑 ============
@@ -138,11 +150,19 @@
     // 房主监听并执行
     async function checkStartCommand() {
         if (!amIHost || !partyId) return;
-        const fd = new FormData();
-        fd.append('action', 'check_start');
-        fd.append('partyId', partyId);
+        
+        const bodyData = new URLSearchParams();
+        bodyData.append('action', 'check_start');
+        bodyData.append('partyId', partyId);
+        
         try {
-            const res = await fetch(START_API_URL, { method: 'POST', body: fd });
+            const res = await fetch(START_API_URL, { 
+                method: 'POST', 
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: bodyData
+            });
             const data = await res.json();
             if (data.start) {
                 console.log('[AutoStart] 收到队友开始请求，正在尝试发起...');
