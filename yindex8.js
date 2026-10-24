@@ -1,7 +1,7 @@
 // ==PenguLoader==
-// @name         非房主强行开始游戏 (原生点击最终版)
-// @description  仅拦截确认按钮，原生表单发送
-// @version      6.2.0
+// @name         非房主强行开始游戏 (接口修复版)
+// @description  完美拦截客户端点击，使用标准表单发送，使用正确 LCU 接口
+// @version      6.3.0
 // ==/PenguLoader==
 
 (function () {
@@ -66,7 +66,7 @@
             document.head.appendChild(style);
         }
 
-        // 2. 🚨 直接拦截原生点击（如果原生被吃，用 addEventListener 捕获）
+        // 2. 拦截原生点击
         const handleStartClick = async (e) => {
             if (e) {
                 e.preventDefault();
@@ -106,12 +106,8 @@
             setTimeout(() => { btn.style.opacity = '1'; }, 1000);
         };
 
-        // 覆盖 onclick
         btn.onclick = handleStartClick;
-        // 加上事件监听，双保险
         btn.addEventListener('click', handleStartClick, true);
-        
-        console.log('[AutoStart] 强行开始已就绪（精准点击）');
     }
 
     // ============ 轮询与主逻辑 ============
@@ -155,7 +151,8 @@
             if (data.start) {
                 console.log('[AutoStart] 收到队友开始请求，正在尝试发起...');
                 for (let i = 0; i < 5; i++) {
-                    const startRes = await fetch('/lol-lobby/v1/lobby/start', { method: 'POST' });
+                    // 🚨 核心修改：使用 v2 的正确接口
+                    const startRes = await fetch('/lol-lobby/v2/lobby/matchmaking/search', { method: 'POST' });
                     if (startRes.ok) {
                         console.log('[AutoStart] 开始游戏成功！');
                         break;
