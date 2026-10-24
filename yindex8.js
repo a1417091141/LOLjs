@@ -1,13 +1,12 @@
 // ==PenguLoader==
-// @name         非房主强行开始游戏 (最终优化版)
-// @description  保留原生结构，安全通讯，带点击反馈
-// @version      5.7.0
+// @name         非房主强行开始游戏 (绝对原版)
+// @description  保留所有原生结构，强制将蓝色渲染为淡绿色
+// @version      5.9.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
-    // 🚨 请确保这个地址可以访问
     const START_API_URL = 'https://140.245.73.30/yaofan/start_api.php'; 
     const POLL_INTERVAL = 1000;
 
@@ -34,7 +33,6 @@
 
         const isNowHost = lobby.localMember.isLeader;
 
-        // 如果是房主，恢复原样
         if (isNowHost) {
             if (btn.classList.contains('force-hacked')) {
                 btn.classList.remove('force-hacked');
@@ -52,66 +50,64 @@
         btn.classList.add('force-hacked');
         btn.classList.remove('disabled');
 
-        // 修复了 CSS 的 drop-shadow 拼写错误，并加上了按钮点击变暗效果
+        // 🚨 彻底修复 CSS
         if (!document.getElementById('green-start-style')) {
             const style = document.createElement('style');
             style.id = 'green-start-style';
             style.innerHTML = `
                 .confirm-button-container .confirm.force-hacked {
-                    filter: hue-rotate(80deg) drop-shadow(0 0 8px rgba(140, 255, 140, 0.6)) !important;
-                    transition: filter 0.2s ease, opacity 0.2s ease;
+                    filter: hue-rotate(80deg) !important;
+                    transition: filter 0.2s ease;
                 }
                 .confirm-button-container .confirm.force-hacked .middle-confirm {
                     filter: hue-rotate(-80deg) !important;
-                    color: #ffffff !important;
+                    color: #ffffff !important; 
                     font-weight: bold;
                 }
             `;
             document.head.appendChild(style);
         }
 
-        // 拦截点击
+        // 🚨 关键点：确保 onclick 能挂载成功
         btn.onclick = async (e) => {
             e.preventDefault();
             e.stopPropagation();
             
+            // 打印检查
+            console.log("========== [AutoStart] 按钮被点击了！ ==========");
+            
             if (!partyId) {
-                console.warn('[AutoStart] 队伍ID获取失败，请稍等重试');
+                console.warn('[AutoStart] 错误：partyId 为空，可能还没进入房间！');
                 return;
             }
-            
-            // 🚨 精准获取文字节点，加容错防报错
+
+            // 文字反馈
             const textEl = btn.querySelector('.middle-confirm') || btn;
             const originalText = textEl.innerText;
-            textEl.innerText = '请求发送中...';
-            btn.style.opacity = '0.6';
+            textEl.innerText = '发送中...';
 
             const fd = new FormData();
             fd.append('action', 'request_start');
             fd.append('partyId', partyId);
-
+            
             try { 
-                // 🚨 增加 timeout 防止服务端由于文件锁卡住导致请求无响应
-                const response = await fetch(START_API_URL, { 
-                    method: 'POST', 
-                    body: fd,
-                    timeout: 3000 
-                }); 
-                if (!response.ok) {
-                    console.error('[AutoStart] 请求服务器失败，HTTP:', response.status);
-                    textEl.innerText = '请求失败';
+                console.log('[AutoStart] 正在向服务器发送 POST 请求...');
+                // 原封不动的 fetch
+                const response = await fetch(START_API_URL, { method: 'POST', body: fd });
+                console.log('[AutoStart] 服务器响应状态码:', response.status);
+                
+                if (response.ok) {
+                    textEl.innerText = '已请求';
                 } else {
-                    console.log('[AutoStart] 开始请求已成功发送给服务器');
-                    textEl.innerText = '已请求开始';
+                    textEl.innerText = '请求异常';
                 }
             } catch(err) {
-                console.error('[AutoStart] 网络或跨域(CORS)错误:', err);
+                console.error('[AutoStart] fetch 网络报错:', err);
                 textEl.innerText = '网络错误';
             }
             
             setTimeout(() => { 
                 textEl.innerText = originalText;
-                btn.style.opacity = '1'; 
             }, 1500);
         };
         
@@ -146,7 +142,7 @@
         fd.append('action', 'check_start');
         fd.append('partyId', partyId);
         try {
-            const res = await fetch(START_API_URL, { method: 'POST', body: fd, timeout: 3000 });
+            const res = await fetch(START_API_URL, { method: 'POST', body: fd });
             const data = await res.json();
             if (data.start) {
                 console.log('[AutoStart] 收到队友开始请求，正在尝试发起...');
