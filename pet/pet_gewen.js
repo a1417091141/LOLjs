@@ -375,13 +375,11 @@
         if (idleTimer) clearInterval(idleTimer);
     };
 
+    // ==========================================
+    // 🚨 核心：彻底去掉一切检测，强行秒起
+    // ==========================================
     function safeStart() {
-        // 强制检测大厅元素是否出现
-        const isReady = document.querySelector('.client-root') || document.querySelector('.parties-game-navs');
-        if (!isReady) {
-            setTimeout(safeStart, 1000);
-            return;
-        }
+        // 只要没渲染过，立刻启动！
         if (document.getElementById('three-pet-container')) return;
         initEngine();
     }
@@ -394,9 +392,10 @@
         }
     });
 
+    // 如果是上次选中的宠物，立刻启动（同步执行，无延迟）
     const savedPet = DataStore.get('pet_current_model', 'yasuo');
     if (!savedPet || savedPet === CONF.name) {
-        setTimeout(safeStart, 2000);
+        safeStart(); 
     }
 
 })();
