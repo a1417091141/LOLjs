@@ -1,7 +1,7 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (全队监控无死角版)
-// @version      12.5.0
+// @description  在选人界面显示对方英雄及备选池 (全队监控 + 左对齐优化)
+// @version      12.6.0
 // ==/PenguLoader==
 
 (function () {
@@ -62,7 +62,6 @@
         }
     }
 
-    // 🚨 核心修改：取消防抖，强制每次都上传最新全队名单
     async function uploadMyTeam(session) {
         if (!partyId || !myPuuid) return;
         
@@ -248,9 +247,11 @@
             const container = enemyBenchContainer.querySelector('.bench-container');
             if (container) {
                 container.innerHTML = '';
+                // 🚨 核心修复：强制靠左对齐，防止两端顶满
                 container.style.display = 'flex';
                 container.style.flexDirection = 'row';
                 container.style.flexWrap = 'wrap';
+                container.style.justifyContent = 'flex-start';
                 container.style.gap = '5px';
             }
             
@@ -341,7 +342,6 @@
                 
                 if (!partyId) partyId = sessionStorage.getItem('opp_display_party_id');
 
-                // 每 1.5 秒强制上传全队数据（防止挂机导致队友选人无法同步）
                 if (partyId && myPuuid) await uploadMyTeam(session);
 
                 const opponent = await fetchOpponent();
