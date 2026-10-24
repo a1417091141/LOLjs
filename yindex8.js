@@ -1,7 +1,7 @@
 // ==PenguLoader==
-// @name         非房主强行开始游戏 (纯原生表单版)
-// @description  完美拦截客户端点击，使用标准表单发送
-// @version      6.1.0
+// @name         非房主强行开始游戏 (原生点击最终版)
+// @description  仅拦截确认按钮，原生表单发送
+// @version      6.2.0
 // ==/PenguLoader==
 
 (function () {
@@ -22,7 +22,7 @@
         } catch (e) { return null; }
     }
 
-    // ============ 核心：遮盖层拦截 + 表单发送 ============
+    // ============ 核心：精准劫持确认按钮 ============
     async function hackStartButton() {
         const btn = document.querySelector('.confirm-button-container .confirm');
         if (!btn) return;
@@ -32,23 +32,21 @@
         if (!lobby || !lobby.localMember) return;
 
         const isNowHost = lobby.localMember.isLeader;
-        const overlayId = 'pet-start-overlay';
 
-        // 如果是房主，清理遮盖层并恢复
+        // 如果是房主，恢复原样
         if (isNowHost) {
             if (btn.classList.contains('force-hacked')) {
                 btn.classList.remove('force-hacked');
                 btn.classList.add('disabled');
-                const oldOverlay = document.getElementById(overlayId);
-                if (oldOverlay) oldOverlay.remove();
+                btn.onclick = null;
                 const styleEl = document.getElementById('green-start-style');
                 if (styleEl) styleEl.remove();
             }
             return; 
         }
 
-        // 如果已经加过遮盖层，直接跳过
-        if (document.getElementById(overlayId)) return;
+        // 非房主逻辑
+        if (btn.classList.contains('force-hacked')) return;
 
         // 1. 把按钮变绿
         btn.classList.add('force-hacked');
@@ -68,42 +66,28 @@
             document.head.appendChild(style);
         }
 
-        // 2. 创建透明遮盖层
-        const overlay = document.createElement('div');
-        overlay.id = overlayId;
-        overlay.style.cssText = `
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            z-index: 99999; cursor: pointer;
-            background: transparent;
-        `;
-
-        const container = btn.closest('.confirm-button-container') || btn;
-        if (window.getComputedStyle(container).position === 'static') {
-            container.style.position = 'relative';
-        }
-        container.appendChild(overlay);
-
-        // 3. 在遮盖层上绑定点击
-        overlay.onclick = async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
+        // 2. 🚨 直接拦截原生点击（如果原生被吃，用 addEventListener 捕获）
+        const handleStartClick = async (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             
-            console.log("========== [AutoStart] 遮罩层被点击了！ ==========");
+            console.log("========== [AutoStart] 确认按钮被点击！ ==========");
             
             if (!partyId) {
-                console.warn('[AutoStart] 错误：partyId 为空，请稍等重试！');
+                console.warn('[AutoStart] partyId 为空，请稍等。');
                 return;
             }
 
             btn.style.opacity = '0.5';
 
-            // 🚨 核心修改：不用 FormData，改用 URLSearchParams 发送标准表单
             const bodyData = new URLSearchParams();
             bodyData.append('action', 'request_start');
             bodyData.append('partyId', partyId);
             
             try { 
-                console.log('[AutoStart] 正在发送 POST 到:', START_API_URL);
+                console.log('[AutoStart] 正在发送 POST...');
                 const res = await fetch(START_API_URL, { 
                     method: 'POST', 
                     headers: {
@@ -112,9 +96,8 @@
                     body: bodyData
                 }); 
                 
-                console.log('[AutoStart] 服务器响应码:', res.status);
                 const text = await res.text();
-                console.log('[AutoStart] 服务器返回内容:', text);
+                console.log('[AutoStart] 服务器返回:', text);
                 
             } catch(err) {
                 console.error('[AutoStart] 网络错误:', err);
@@ -122,8 +105,13 @@
             
             setTimeout(() => { btn.style.opacity = '1'; }, 1000);
         };
+
+        // 覆盖 onclick
+        btn.onclick = handleStartClick;
+        // 加上事件监听，双保险
+        btn.addEventListener('click', handleStartClick, true);
         
-        console.log('[AutoStart] 遮罩层已加载，强行开始就绪');
+        console.log('[AutoStart] 强行开始已就绪（精准点击）');
     }
 
     // ============ 轮询与主逻辑 ============
