@@ -1,7 +1,7 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (重开修复版)
+// @name         海克斯自动选人 (秒选大圣但不强切版)
 // @description  适配LOL原生风格，DataStore持久化，完美兼容国服海克斯大乱斗 (3270)
-// @version      415.0.0
+// @version      418.0.0
 // ==/PenguLoader==
 
 (function () {
@@ -12,6 +12,7 @@
     const KEY_FALLBACK = 'auto_pick_fallback';
     const KEY_PRIORITY = 'auto_pick_priority';
     const KEY_CUSTOM_ONLY = 'auto_pick_custom_only';
+    const WUKONG_ID = 62; // 🚨 恢复大圣 ID 常量
 
     let isEnabled = DataStore.get(KEY_ENABLED, false);
     let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
@@ -25,7 +26,6 @@
     let hasSwappedOnce = false;
     let isPanelOpen = false;
     let dragSrcIndex = null;
-    const WUKONG_ID = 62;
     let swapTargetId = null;
     let lastSwapAttemptTime = 0;
     let isCustomGame = false;
@@ -297,13 +297,13 @@
             const session = await res.json();
             if (!session.benchEnabled) return;
 
-            // 🚨 重开修复 1：用 session 身份特征检测新一局，不依赖轮询是否采到非 ChampSelect
+            // 🚨 重开修复 1：用 session 身份特征检测新一局
             const sessionKey = [
                 session.gameId,
                 session.chatDetails && session.chatDetails.gameId,
                 session.queueId,
                 session.localPlayerCellId,
-                (session.actions || []).map(a => a.id).join(','),   // 每局唯一
+                (session.actions || []).map(a => a.id).join(','),
                 (session.myTeam || []).map(p => p.cellId).join(',')
             ].join('|');
 
@@ -316,7 +316,6 @@
                 fallbackPickId = null;
             }
 
-            // 🚨 重开修复 2：queueId 未就绪时不误判
             const queueId = session.queueId;
             const isKiwi = (session.gameMode === 'KIWI');
             const knownCustomQueues = [0, 1700, 1710, 3100, 3130, 3270];
@@ -327,7 +326,7 @@
                 || session.isCustomGame === true;
 
             if (customOnly && !isCustomGame) {
-                if (!queueReady && !isKiwi && session.isCustomGame === undefined) return; // 数据未就绪，等下一轮
+                if (!queueReady && !isKiwi && session.isCustomGame === undefined) return;
                 return;
             }
 
@@ -335,7 +334,6 @@
             const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
             if (!myPlayer) return;
 
-            // 🚨 重开修复 3：offered 补全前置，避免"重置后第一轮数据未就绪"直接 return
             let offered = [];
             if (Array.isArray(session.benchChampions) && session.benchChampions.length > 0) {
                 offered = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
@@ -348,15 +346,17 @@
             }
             if (!offered || offered.length === 0) return;
 
-            // 🚨 重开修复 4：秒选条件加 myActions.length > 0 联合判断
             const myActions = (session.actions || []).flat().filter(a => a.actorCellId === myCellId && a.type === 'pick' && !a.completed);
 
+            // 🚨 初始秒选阶段
             if (!hasLockedInitial && myActions.length > 0) {
                 const action = myActions[0];
 
                 let bestId = null;
+                // 🚨 核心逻辑恢复：如果备选池里有大圣，直接秒选大圣
                 if (offered.includes(WUKONG_ID)) bestId = WUKONG_ID;
                 else {
+                    // 否则按优先级列表选
                     for (const myTargetId of priorityList) {
                         if (offered.includes(myTargetId)) { bestId = myTargetId; break; }
                     }
@@ -365,7 +365,6 @@
                 if (bestId === null) {
                     if (fallbackStrategy === 'none') return;
                     else if (fallbackStrategy === 'random') {
-                        // 🚨 重开修复 5：随机同局固定，不反复横跳
                         if (fallbackPickId === null || !offered.includes(fallbackPickId)) {
                             fallbackPickId = offered[Math.floor(Math.random() * offered.length)];
                         }
@@ -385,6 +384,8 @@
             }
 
             if (hasSwappedOnce) return;
+            
+            // 🚨 如果当前已经是齐天大圣，绝对不切
             if (myPlayer.championId === WUKONG_ID) return;
 
             if (swapTargetId !== null) {
@@ -405,17 +406,15 @@
             }
 
             let bestTargetId = null;
-            if (offered.includes(WUKONG_ID)) bestTargetId = WUKONG_ID;
-            else {
-                let currentPriorityIndex = priorityList.indexOf(myPlayer.championId);
-                if (currentPriorityIndex === -1) currentPriorityIndex = 999;
-                let bestTargetPriorityIndex = currentPriorityIndex;
-                for (const offeredId of offered) {
-                    const pIndex = priorityList.indexOf(offeredId);
-                    if (pIndex !== -1 && pIndex < bestTargetPriorityIndex) {
-                        bestTargetId = offeredId;
-                        bestTargetPriorityIndex = pIndex;
-                    }
+            // 🚨 换人阶段：完全按优先级列表换人，没有大圣特权
+            let currentPriorityIndex = priorityList.indexOf(myPlayer.championId);
+            if (currentPriorityIndex === -1) currentPriorityIndex = 999;
+            let bestTargetPriorityIndex = currentPriorityIndex;
+            for (const offeredId of offered) {
+                const pIndex = priorityList.indexOf(offeredId);
+                if (pIndex !== -1 && pIndex < bestTargetPriorityIndex) {
+                    bestTargetId = offeredId;
+                    bestTargetPriorityIndex = pIndex;
                 }
             }
 
@@ -431,7 +430,6 @@
     const init = async () => {
         loadAllChampions();
 
-        // 🚨 重开修复：轮询 1s → 250ms，提高采到"退出选人瞬态"的概率（辅助，根治靠 sessionKey）
         setInterval(async () => {
             try {
                 const phaseRes = await fetch('/lol-gameflow/v1/gameflow-phase');
@@ -446,12 +444,11 @@
                         clearInterval(checkTimer);
                         checkTimer = null;
                     }
-                    // 兜底重置（主要重置靠 runEngine 内 sessionKey 检测）
                     hasLockedInitial = false;
                     hasSwappedOnce = false;
                     swapTargetId = null;
                     isCustomGame = false;
-                    lastSessionKey = null;      // ← 保证下次进 ChampSelect 必触发 key 变化
+                    lastSessionKey = null;
                     fallbackPickId = null;
                 }
 
