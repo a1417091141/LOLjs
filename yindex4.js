@@ -1,17 +1,18 @@
 // ==PenguLoader==
 // @name         Opponent Champ Display
-// @description  在选人界面显示对方英雄及备选池 (全队监控 + 大圣雷达随机播报)
-// @version      13.1.0
+// @description  在选人界面显示对方英雄及备选池 (全队监控 + 大圣雷达 500ms极速版)
+// @version      13.2.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
     const SERVER_BASE = 'https://140.245.73.30/yaofan/hksxr.php';
-    const POLL_INTERVAL = 1500;
-    const WUKONG_ID = 62; // 齐天大圣的 ID
+    // 🚨 核心修改：从 1500 改为 500（半秒刷新一次）
+    const POLL_INTERVAL = 500; 
+    const WUKONG_ID = 62;
 
-    // 🚨 把你这 11 个音效的地址全放进来，代码会随机抽一个播放
+    // 🚨 你的 11 个大圣音效
     const WUKONG_SOUNDS = [
         'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_俺的取经之路才刚刚开始。_Voice_Champion_MonkeyKing_889ABBC7.wav',
         'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_俺老孙来也。_Voice_Champion_MonkeyKing_Choose.mp3',
@@ -25,8 +26,6 @@
         'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_希望他们能和俺多过几招。_Voice_Champion_MonkeyKing_3CFB5826.wav',
         'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_有妖气。_Voice_Champion_MonkeyKing_5E1E7EDE.wav'
     ];
-    
-    // 提示：如果你的目录里没有把这些文件放入 wukong 文件夹，而是直接放在 yaofan 下，请把 URL 里的 `/wukong` 删掉。
 
     let myPuuid = null;
     let partyId = null;
@@ -39,8 +38,6 @@
     let floatingIcon = null;
     let enemyBenchContainer = null;
     let lastPhase = '';
-    
-    // 🚨 控制全局是否已经播报过（一局只播一次）
     let wukongAlertPlayed = false; 
 
     async function lcuGet(path) {
@@ -304,14 +301,11 @@
         });
     }
 
-    // 🚨 核心：大圣雷达检测
     function checkWukong(myTeam, enemyTeam, enemyBench) {
-        // 如果这局已经播报过了，直接退出，绝对不重复响
         if (wukongAlertPlayed) return;
 
         let hasWukong = false;
 
-        // 1. 查我方英雄和预选
         if (myTeam) {
             for (const p of myTeam) {
                 if (p.championId === WUKONG_ID || p.championPickIntent === WUKONG_ID) {
@@ -321,7 +315,6 @@
             }
         }
 
-        // 2. 查敌方英雄和预选
         if (!hasWukong && enemyTeam) {
             for (const p of enemyTeam) {
                 if (p.championId === WUKONG_ID || p.championPickIntent === WUKONG_ID) {
@@ -331,25 +324,22 @@
             }
         }
 
-        // 3. 查敌方备选池
         if (!hasWukong && enemyBench) {
             if (enemyBench.includes(WUKONG_ID)) {
                 hasWukong = true;
             }
         }
 
-        // 检测到猴子，播放音效
         if (hasWukong) {
-            wukongAlertPlayed = true; // 锁死，后续不管怎么换都不再响了
+            wukongAlertPlayed = true; 
             console.log('[OpponentDisplay] 🐒 检测到齐天大圣！');
             
-            // 随机抽一首播放
             const randomSound = WUKONG_SOUNDS[Math.floor(Math.random() * WUKONG_SOUNDS.length)];
             console.log('[OpponentDisplay] 播放音效:', randomSound);
             
             try {
                 const audio = new Audio(randomSound);
-                audio.volume = 1.0; // 音量拉满
+                audio.volume = 1.0;
                 audio.play().catch(e => console.warn('浏览器拦截了自动播放', e));
             } catch (e) {
                 console.error('音效播放失败', e);
@@ -360,7 +350,6 @@
     function renderOpponent(opponent, sessionMyTeam) {
         if (!opponent) return;
 
-        // 每次渲染前，检查大圣
         checkWukong(sessionMyTeam, opponent.enemyTeam, opponent.enemyBench);
 
         if (opponent.enemyTeam && opponent.enemyTeam.length > 0) {
@@ -424,9 +413,7 @@
                 if (opponent) {
                     renderOpponent(opponent, session.myTeam);
                 } else {
-                    // 即使没拿对面数据，也查一下自己这边有没有秒选猴子的
                     checkWukong(session.myTeam, null, null);
-                    
                     updateIconStatus(false);
                     clearInjected();
                     renderEnemyBench([]);
@@ -438,7 +425,6 @@
             
             if (phase === 'InProgress' || phase === 'EndOfGame' || phase === 'None') {
                 lastOpponentSig = '';
-                // 重置大圣检测状态，以便下一局再响
                 wukongAlertPlayed = false;
             }
         }
@@ -447,6 +433,7 @@
     function start() {
         console.log('[OpponentDisplay] 插件已启动');
         if (pollTimer) clearInterval(pollTimer);
+        // 🚨 使用 500ms 的高频轮询
         pollTimer = setInterval(() => { poll().catch(() => {}); }, POLL_INTERVAL);
         poll().catch(() => {});
     }
