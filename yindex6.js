@@ -1,471 +1,872 @@
 // ==PenguLoader==
-// @name         海克斯自动选人 (秒选大圣但不强切版)
-// @description  适配LOL原生风格，DataStore持久化，完美兼容国服海克斯大乱斗 (3270)
-// @version      418.0.0
+// @name         Opponent Champ Display
+// @description  在选人界面显示对方英雄及备选池 (全队监控 + 大圣雷达 + 跨队喊猴)
+// @version      15.2.0
 // ==/PenguLoader==
 
 (function () {
     'use strict';
 
-    // ===== 1. 持久化读取 =====
-    const KEY_ENABLED = 'auto_pick_enabled';
-    const KEY_FALLBACK = 'auto_pick_fallback';
-    const KEY_PRIORITY = 'auto_pick_priority';
-    const KEY_CUSTOM_ONLY = 'auto_pick_custom_only';
-    const WUKONG_ID = 62; // 🚨 恢复大圣 ID 常量
+    const SERVER_BASE = 'https://140.245.73.30/yaofan/hksxr.php';
+    // 🚨 核心修改：从 1500 改为 500（半秒刷新一次）
+    const POLL_INTERVAL = 500; 
+    const WUKONG_ID = 62;
 
-    let isEnabled = DataStore.get(KEY_ENABLED, false);
-    let fallbackStrategy = DataStore.get(KEY_FALLBACK, 'random');
-    let priorityList = DataStore.get(KEY_PRIORITY, []) || [];
+    // ---- 15.2.0 稳定性与实时性参数 ----
+    const LCU_TIMEOUT_MS = 4000;
+    const SERVER_TIMEOUT_MS = 6000;
+    const UPLOAD_HEARTBEAT_MS = 4000;
+    const OPP_FETCH_MIN_MS = 700;
+    const UPLOAD_RETRY_MS = 1500;
+    const POLL_STALL_MS = 12000;
 
-    let customOnly = DataStore.get(KEY_CUSTOM_ONLY, false) === true;
+    // 🚨 你的 11 个大圣音效
+    const WUKONG_SOUNDS = [
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_俺的取经之路才刚刚开始。_Voice_Champion_MonkeyKing_889ABBC7.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_俺老孙来也。_Voice_Champion_MonkeyKing_Choose.mp3',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_俺一个跟头能翻十万八千里。_Voice_Champion_MonkeyKing_1A4BB531.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_吃俺老孙一棒。_Voice_Champion_MonkeyKing_007EC1DA.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_呔，妖怪哪里跑？_Voice_Champion_MonkeyKing_A2AD6101.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_嘿嘿，俺老孙正等着呢。_Voice_Champion_MonkeyKing_5BF4C360.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_领教下俺老孙的本事吧。_Voice_Champion_MonkeyKing_F5153B8E.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_嗯，此地不宜久留。_Voice_Champion_MonkeyKing_75CB5BCD.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_取经才是重中之重。_Voice_Champion_MonkeyKing_746D569D.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_希望他们能和俺多过几招。_Voice_Champion_MonkeyKing_3CFB5826.wav',
+        'https://140.245.73.30/yaofan/wukong/齐天大圣_默认皮肤_有妖气。_Voice_Champion_MonkeyKing_5E1E7EDE.wav'
+    ];
 
-    let allChampions = [];
-    let checkTimer = null;
-    let hasLockedInitial = false;
-    let hasSwappedOnce = false;
-    let isPanelOpen = false;
-    let dragSrcIndex = null;
-    let swapTargetId = null;
-    let lastSwapAttemptTime = 0;
-    let isCustomGame = false;
+    let myPuuid = null;
+    let partyId = null;
+    let lastOpponentSig = '';
+    let pollTimer = null;
+    let champMap = {};
+    let champMapLoaded = false;
+    const injectedNodes = new Set();
+    
+    let floatingIcon = null;
+    let enemyBenchContainer = null;
+    let lastPhase = '';
+    let wukongAlertPlayed = false;
 
-    // 🚨 重开修复：跨局状态检测
-    let lastSessionKey = null;
-    let fallbackPickId = null;
+    // ---- 15.2.0 运行状态 ----
+    let pollInFlight = false;
+    let pollStartedAt = 0;
+    let uploadInFlight = false;
+    let lastUploadSig = '';
+    let lastUploadAt = 0;
+    let lastOppFetchAt = 0;
+    let lastOpponent = null;
+    let lastOpponentAt = 0;
+    // 本局统计：上传/拉取失败计数，仅用于诊断
+    let uploadFailCount = 0;
+    let lastUploadFailAt = 0;
+    let fetchFailCount = 0;
+    function fetchWithTimeout(url, opts, ms) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, ms);
+        const merged = Object.assign({}, opts || {}, { signal: ctrl.signal });
+        return fetch(url, merged).then(function (res) {
+            clearTimeout(timer);
+            return res;
+        }, function (err) {
+            clearTimeout(timer);
+            throw err;
+        });
+    } 
 
-    // ===== 2. 英雄数据加载 =====
-    const DATA_API_ORIGIN = "https://data.dtodo.cn";
-    const DATA_API_PREFIX = "/api/client/v1";
+    // ================= 跨队消息（无面板） =================
+    const PRE_GAME = '@lol-pre-game.pvp.net';
+    const CHAMP_SELECT = '@lol-champ-select.pvp.net';
+    const WUKONG_TEXT = '有猴！有猴！！有猴！！！';
+    const DEDUP_WINDOW_MS = 15000;
+    let roomConvId = null;
+    let crossHooksInstalled = false;
+    let lastWukongSentAt = 0;
 
-    async function loadAllChampions() {
-        if (allChampions.length > 0) return;
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    function resolveRoomConv() {
+        if (roomConvId) return roomConvId;
+        if (!partyId) { try { partyId = sessionStorage.getItem('opp_display_party_id'); } catch (e) {} }
+        if (partyId) roomConvId = partyId + PRE_GAME;
+        return roomConvId;
+    }
+
+    async function refreshRoomConvFromChat() {
+        const list = await lcuGet('/lol-chat/v1/conversations');
+        if (!Array.isArray(list)) return null;
+        for (const c of list) {
+            if (c && typeof c.id === 'string' && c.id.indexOf(PRE_GAME) >= 0) { roomConvId = c.id; return c.id; }
+        }
+        return null;
+    }
+
+    function convMsgsUrl(cid) {
+        return '/lol-chat/v1/conversations/' + encodeURIComponent(cid) + '/messages';
+    }
+
+    async function getRoomMessages() {
+        let cid = resolveRoomConv();
+        if (!cid) { cid = await refreshRoomConvFromChat(); }
+        if (!cid) { return null; }
         try {
-            const confRes = await fetch(`${DATA_API_ORIGIN}${DATA_API_PREFIX}/config`);
-            const conf = await confRes.json();
-            const manifestRes = await fetch(`${DATA_API_ORIGIN}${conf.manifest}`);
-            const manifest = await manifestRes.json();
-            let champFile = null;
-            for (const f of manifest.files || []) {
-                if (f.path === "champions.json") { champFile = f.url; break; }
+            let res = await fetch(convMsgsUrl(cid));
+            if (res.status === 404) {
+                const alt = await refreshRoomConvFromChat();
+                if (!alt || alt === cid) { return null; }
+                cid = alt;
+                res = await fetch(convMsgsUrl(cid));
             }
-            if (champFile) {
-                const champsRes = await fetch(`${DATA_API_ORIGIN}${champFile}`);
-                const champsData = await champsRes.json();
-                const data = champsData.data || [];
+            if (!res.ok) { return null; }
+            const arr = await res.json();
+            return { cid: cid, list: Array.isArray(arr) ? arr : [] };
+        } catch (e) { return null; }
+    }
 
-                const uniqueMap = new Map();
-                data.forEach(c => {
-                    if (c.id && c.name && !uniqueMap.has(c.id)) {
-                        uniqueMap.set(c.id, {
-                            id: c.id,
-                            name: c.name,
-                            icon: `/lol-game-data/assets/v1/champion-icons/${c.id}.png`
-                        });
+    async function postToConv(cid, text) {
+        return await fetch(convMsgsUrl(cid), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: text, type: 'chat' })
+        });
+    }
+
+    async function hasRecentWukongMessage() {
+        const got = await getRoomMessages();
+        if (!got) { return false; }
+        const now = Date.now();
+        for (let i = got.list.length - 1; i >= 0; i--) {
+            const m = got.list[i];
+            if (!m) { continue; }
+            if (String(m.body || '').trim() !== WUKONG_TEXT) { continue; }
+            const ts = Number(m.timestamp || 0);
+            if (!ts) { return true; }
+            if (Math.abs(now - ts) <= DEDUP_WINDOW_MS) { return true; }
+        }
+        return false;
+    }
+
+    async function sendRoomMessage(text, reason) {
+        let cid = resolveRoomConv();
+        if (!cid) { cid = await refreshRoomConvFromChat(); }
+        if (!cid) { console.warn('[OpponentDisplay] 未找到房间频道，跳过发送'); return false; }
+        try {
+            let res = await postToConv(cid, text);
+            if (res.status === 404) {
+                const alt = await refreshRoomConvFromChat();
+                if (alt && alt !== cid) { cid = alt; res = await postToConv(cid, text); }
+            }
+            if (res.status === 404) {
+                console.warn('[OpponentDisplay] 房间聊天频道尚未建立（房间里还没有其他真人），本次未发送');
+                return false;
+            }
+            if (!res.ok) { console.warn('[OpponentDisplay] 跨队发送失败 HTTP', res.status); return false; }
+            console.log('[OpponentDisplay] 已发送跨队消息:', text, '(' + (reason || '') + ')');
+            return true;
+} catch (e) { console.warn('[OpponentDisplay] 跨队发送异常', e && e.message); return false; }
+    }
+
+    async function sendWukongAlert() {
+        const now = Date.now();
+        if (now - lastWukongSentAt < 3000) { console.log('[OpponentDisplay] 猴子提醒刚触发过，跳过'); return; }
+        lastWukongSentAt = now;
+        const delay = Math.floor(Math.random() * 1500);
+        if (delay > 0) await sleep(delay);
+        const exists = await hasRecentWukongMessage();
+        if (exists) { console.log('[OpponentDisplay] 房间里已有人发过猴子提醒，本机跳过（防刷屏）'); return; }
+        await sendRoomMessage(WUKONG_TEXT, 'wukong');
+    }
+
+    function isChampSelectChannel(cid) {
+        return typeof cid === 'string' && cid.indexOf(CHAMP_SELECT) >= 0;
+    }
+
+    function parseSendUrl(url) {
+        if (!url) return null;
+        const m = String(url).match(/\/lol-chat\/v1\/conversations\/([^\/?#]+)\/messages/);
+        if (!m) return null;
+        try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+    }
+
+    function bodyTextOfString(s) {
+        if (typeof s !== 'string') return null;
+        try { const o = JSON.parse(s); return o && typeof o.body === 'string' ? o.body : null; } catch (e) { return null; }
+    }
+
+    function installCrossHooks() {
+        if (crossHooksInstalled) return;
+        crossHooksInstalled = true;
+        try {
+            const origFetch = window.fetch;
+            if (typeof origFetch === 'function') {
+                window.fetch = function (input, init) {
+                    try {
+                        const url = typeof input === 'string' ? input : (input && input.url);
+                        const cid = parseSendUrl(url);
+                        if (cid && isChampSelectChannel(cid)) {
+                            const txt = init ? bodyTextOfString(init.body) : null;
+                            if (txt) { resolveRoomConv(); sendRoomMessage(txt, 'mirror'); }
+                        }
+                    } catch (e) {}
+                    return origFetch.apply(this, arguments);
+                };
+            }
+        } catch (e) { console.warn('[OpponentDisplay] fetch 挂钩失败', e); }
+        try {
+            const XP = XMLHttpRequest.prototype;
+            const origOpen = XP.open;
+            const origSend = XP.send;
+            XP.open = function (method, url) { try { this.__odUrl = url; } catch (e) {} return origOpen.apply(this, arguments); };
+            XP.send = function (body) {
+                try {
+                    const cid = parseSendUrl(this.__odUrl);
+                    if (cid && isChampSelectChannel(cid)) {
+                        const txt = bodyTextOfString(body);
+                        if (txt) { resolveRoomConv(); sendRoomMessage(txt, 'mirror'); }
                     }
-                });
-                allChampions = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+                } catch (e) {}
+                return origSend.apply(this, arguments);
+            };
+        } catch (e) { console.warn('[OpponentDisplay] XHR 挂钩失败', e); }
+        console.log('[OpponentDisplay] 跨队转发已启用（无面板）');
+    }
 
-                if (document.getElementById('augment-auto-pick-panel')) {
-                    renderUI();
-                }
+    async function lcuGet(path, ms) {
+        try {
+            const res = await fetchWithTimeout(path, {}, ms || LCU_TIMEOUT_MS);
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (e) { return null; }
+    }
+
+    async function loadChampionMap() {
+        if (champMapLoaded) return;
+        const data = await lcuGet('/lol-game-data/assets/v1/champion-summary.json');
+        if (Array.isArray(data)) {
+            for (const c of data) {
+                if (c.id && c.id > 0) champMap[c.id] = { name: c.name || '', alias: c.alias || '' };
             }
-        } catch (e) {}
+            champMapLoaded = true;
+        }
     }
 
     function champName(id) {
-        if (!id || id === 'null') return '无';
-        const c = allChampions.find(x => x.id === id);
-        return c ? c.name : `#${id}`;
+        if (!id) return '未知';
+        const info = champMap[id];
+        return info ? (info.name || info.alias || `ID:${id}`) : `ID:${id}`;
     }
 
-    function champTag(id) {
-        if (!id) return '无';
-        const name = champName(id);
-        if (id === WUKONG_ID) return `${name}[悟空]`;
-        const idx = priorityList.indexOf(id);
-        if (idx === -1) return `${name}(无)`;
-        return `${name}(${idx + 1})`;
+    async function fetchMyPuuid() {
+        const summoner = await lcuGet('/lol-summoner/v1/current-summoner');
+        if (summoner && summoner.puuid) myPuuid = summoner.puuid;
     }
 
-    document.addEventListener('mousedown', (e) => {
-        if (!isPanelOpen) return;
-        const panel = document.getElementById('augment-auto-pick-panel');
-        const triggerBtn = document.getElementById('augment-auto-pick-trigger');
-        if (panel && !panel.contains(e.target) && triggerBtn && !triggerBtn.contains(e.target)) {
-            isPanelOpen = false;
-            panel.style.display = 'none';
+    async function updatePartyId() {
+        const lobby = await lcuGet('/lol-lobby/v2/lobby');
+        if (lobby && lobby.partyId) {
+            if (partyId !== lobby.partyId) {
+                partyId = lobby.partyId;
+                sessionStorage.setItem('opp_display_party_id', partyId);
+                roomConvId = partyId + PRE_GAME;
+            }
         }
-    }, true);
+    }
 
-    // ===== 3. 界面注入 =====
-    function injectUI() {
-        const target = document.querySelector('.open-party-toggle');
-        if (!target) return;
-        target.style.transform = 'translateY(-15px)';
+    function buildUploadForm(session) {
+        const players = (session.myTeam || []).map(p => ({
+            puuid: p.puuid,
+            cellId: p.cellId,
+            summonerId: p.summonerId || 0,
+            championId: p.championId || 0,
+            championPickIntent: p.championPickIntent || 0,
+        }));
 
-        if (!document.getElementById('augment-auto-pick-trigger')) {
-            const triggerBtn = document.createElement('div');
-            triggerBtn.id = 'augment-auto-pick-trigger';
-            triggerBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#C8AA6E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
-
-            triggerBtn.style.cssText = `position: absolute; bottom: -38px; right: 20px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #1E2328 0%, #0A0E12 100%); border: 1px solid #785A28; border-radius: 4px; z-index: 9999; box-shadow: 0 2px 5px rgba(0,0,0,0.5); transition: all 0.2s;`;
-
-            triggerBtn.onmouseenter = () => { triggerBtn.style.borderColor = '#C8AA6E'; triggerBtn.querySelector('svg').setAttribute('stroke', '#F0E6D2'); };
-            triggerBtn.onmouseleave = () => { triggerBtn.style.borderColor = '#785A28'; triggerBtn.querySelector('svg').setAttribute('stroke', '#C8AA6E'); };
-
-            triggerBtn.onclick = () => {
-                isPanelOpen = !isPanelOpen;
-                const p = document.getElementById('augment-auto-pick-panel');
-                p.style.display = isPanelOpen ? 'flex' : 'none';
-                if (isPanelOpen) renderUI();
-            };
-            if (window.getComputedStyle(target).position === 'static') target.style.position = 'relative';
-            target.appendChild(triggerBtn);
+        let bench = [];
+        if (Array.isArray(session.benchChampions)) {
+            bench = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
         }
 
-        if (!document.getElementById('augment-auto-pick-panel')) {
-            const panel = document.createElement('div');
-            panel.id = 'augment-auto-pick-panel';
-            panel.style.cssText = `position: fixed; bottom: 80px; right: 310px; width: 520px; height: 560px; background: #010A13; border: 1px solid #785A28; box-shadow: 0 0 20px rgba(0,0,0,0.9); z-index: 99999; display: none; flex-direction: column; font-family: 'Microsoft YaHei';`;
+        let sig = '';
+        try { sig = JSON.stringify(players) + '|' + JSON.stringify(bench); } catch (e) { sig = String(Date.now()); }
 
-            panel.innerHTML = `
-                <div style="padding: 12px; border-bottom: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center;">
-                    <span style="color: #F0E6D2; font-size: 14px; font-weight: bold;">海克斯自动选人</span>
-                    <div id="native-toggle" style="width: 44px; height: 24px; background: ${isEnabled ? '#2ECC71' : '#3C2E14'}; border-radius: 12px; position: relative; cursor: pointer; transition: 0.3s;">
-                        <div style="width: 20px; height: 20px; background: #fff; border-radius: 50%; position: absolute; top: 2px; left: ${isEnabled ? '22px' : '2px'}; transition: 0.3s;"></div>
-                    </div>
-                </div>
-                <div style="display: flex; flex: 1; overflow: hidden; padding: 10px; gap: 15px;">
-                    <div style="flex: 1; display: flex; flex-direction: column;">
-                        <div style="font-size: 12px; color: #A09B8C; margin-bottom: 5px;">全部英雄</div>
-                        <input type="text" id="aug-search" placeholder="搜索..." style="width: 100%; background: #000; border: 1px solid #3C2E14; color: #fff; padding: 6px; font-size: 12px; margin-bottom: 8px;">
-                        <div id="aug-all-list" style="flex: 1; overflow-y: auto;"></div>
-                    </div>
-                    <div style="flex: 1; display: flex; flex-direction: column; border-left: 1px solid #3C2E14; padding-left: 15px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                            <span style="font-size: 12px; color: #A09B8C;">已选优先级 <span style="color:#6B6B6B;font-size:10px;">(可拖动)</span></span>
-                            <span id="aug-btn-clear" style="font-size: 12px; color: #E74C3C; cursor: pointer;">清空</span>
-                        </div>
-                        <div id="aug-priority-list" style="flex: 1; overflow-y: auto;"></div>
-                    </div>
-                </div>
-                <div style="padding: 10px 15px; border-top: 1px solid #3C2E14; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2);">
-                    <div style="display:flex; align-items:center; gap: 6px; cursor:pointer;" id="custom-checkbox-label">
-                        <input type="checkbox" id="custom-only-checkbox" ${customOnly ? 'checked' : ''} style="cursor:pointer; accent-color: #C8AA6E;">
-                        <span style="color: #A09B8C; font-size: 12px;">仅自定义/特殊模式生效</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="color: #F0E6D2; font-size: 13px; font-weight: bold;">保底策略</span>
-                        <select id="fallback-select" style="background: #000; color: #C8AA6E; border: 1px solid #3C2E14; padding: 6px; font-size: 12px; cursor: pointer;">
-                            <option value="random" ${fallbackStrategy === 'random' ? 'selected' : ''}>随机选一个</option>
-                            <option value="rightmost" ${fallbackStrategy === 'rightmost' ? 'selected' : ''}>固定选最右侧</option>
-                            <option value="none" ${fallbackStrategy === 'none' ? 'selected' : ''}>不秒选（等手动）</option>
-                        </select>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(panel);
+        const formData = new FormData();
+        formData.append('action', 'upload');
+        formData.append('partyId', partyId);
+        formData.append('uploaderPuuid', myPuuid);
+        formData.append('players', JSON.stringify(players));
+        formData.append('bench', JSON.stringify(bench));
+        return { formData: formData, sig: sig };
+    }
 
-            const mainToggle = document.getElementById('native-toggle');
-            mainToggle.onclick = () => {
-                isEnabled = !isEnabled;
-                DataStore.set(KEY_ENABLED, isEnabled);
-                mainToggle.style.background = isEnabled ? '#2ECC71' : '#3C2E14';
-                mainToggle.querySelector('div').style.left = isEnabled ? '22px' : '2px';
-            };
+    // 上传：「变化即传 + 心跳兜底」；失败立刻把签名清空，下一轮 500ms 就重试
+    function uploadMyTeam(session) {
+        if (!partyId || !myPuuid) return;
 
-            const fbSelect = document.getElementById('fallback-select');
-            fbSelect.onchange = (e) => {
-                fallbackStrategy = e.target.value;
-                DataStore.set(KEY_FALLBACK, fallbackStrategy);
-            };
+        const built = buildUploadForm(session);
+        if (Date.now() - lastUploadFailAt < UPLOAD_RETRY_MS) return;
+        const unchanged = built.sig === lastUploadSig;
+        const fresh = Date.now() - lastUploadAt < UPLOAD_HEARTBEAT_MS;
+        if (unchanged && fresh) return;
+        if (uploadInFlight) return;
 
-            const customCheckbox = document.getElementById('custom-only-checkbox');
-            customCheckbox.onchange = (e) => {
-                customOnly = e.target.checked;
-                DataStore.set(KEY_CUSTOM_ONLY, customOnly);
-            };
-            document.getElementById('custom-checkbox-label').onclick = (e) => {
-                if (e.target !== customCheckbox) {
-                    customCheckbox.checked = !customCheckbox.checked;
-                    customOnly = customCheckbox.checked;
-                    DataStore.set(KEY_CUSTOM_ONLY, customOnly);
+        uploadInFlight = true;
+        lastUploadSig = built.sig;
+        lastUploadAt = Date.now();
+
+        fetchWithTimeout(SERVER_BASE, { method: "POST", body: built.formData }, SERVER_TIMEOUT_MS)
+            .then(function (res) {
+                uploadInFlight = false;
+                if (!res || !res.ok) {
+                    // 失败：作废签名，让下一轮立刻重传（不等 4s 心跳）
+                    lastUploadSig = "";
+                    lastUploadAt = 0;
+                    uploadFailCount++;
+                    lastUploadFailAt = Date.now();
+                    console.warn("[OpponentDisplay] 上传失败 HTTP", res ? res.status : "network", "，下一轮重试");
                 }
-            };
+            }, function (err) {
+                uploadInFlight = false;
+                lastUploadSig = "";
+                lastUploadAt = 0;
+                uploadFailCount++;
+                lastUploadFailAt = Date.now();
+                console.warn("[OpponentDisplay] 上传异常", err && err.message, "，下一轮重试");
+            });
+    }
+    function fetchOpponent() {
+        if (!partyId || !myPuuid) return Promise.resolve(null);
+        const formData = new FormData();
+        formData.append("action", "opponent");
+        formData.append("partyId", partyId);
+        formData.append("selfPuuid", myPuuid);
 
-            document.getElementById('aug-search').oninput = (e) => renderUI(e.target.value);
-            document.getElementById('aug-btn-clear').onclick = () => {
-                if (confirm('确定要清空所有优先级吗？')) {
-                    priorityList = [];
-                    DataStore.set(KEY_PRIORITY, priorityList);
-                    renderUI();
-                }
-            };
-            renderUI('');
+        return fetchWithTimeout(SERVER_BASE, { method: "POST", body: formData }, SERVER_TIMEOUT_MS)
+            .then(function (res) {
+                if (res.status === 204) return null;
+                if (!res.ok) { fetchFailCount++; return null; }
+                return res.json();
+            })
+            .catch(function (err) {
+                fetchFailCount++;
+                console.warn("[OpponentDisplay] 拉取失败", err && err.message, "，下一轮重试");
+                return null;
+            });
+    }
+    async function clearServerData() {
+        if (!partyId) return;
+        const formData = new FormData();
+        formData.append('action', 'clear');
+        formData.append('partyId', partyId);
+        try { await fetchWithTimeout(SERVER_BASE, { method: 'POST', body: formData }, SERVER_TIMEOUT_MS); } catch (e) {}
+        console.log('[OpponentDisplay] 已通知服务器物理清空数据');
+    }
+
+    function createFloatingIcon() {
+        if (document.getElementById('opp-display-icon')) return;
+        floatingIcon = document.createElement('div');
+        floatingIcon.id = 'opp-display-icon';
+        floatingIcon.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 24px; height: 24px; transition: all 0.3s ease;">
+                <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" fill="currentColor"/>
+            </svg>
+        `;
+        floatingIcon.style.cssText = `
+            position: fixed; top: 30px; right: 30px; width: 40px; height: 40px;
+            background: rgba(0, 0, 0, 0.7); border: 2px solid #555; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; color: #888;
+            z-index: 999999; pointer-events: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: all 0.3s ease;
+        `;
+        document.body.appendChild(floatingIcon);
+    }
+
+    function updateIconStatus(hasData) {
+        if (!floatingIcon) return;
+        const svg = floatingIcon.querySelector('svg');
+        if (hasData) {
+            floatingIcon.style.borderColor = '#c8aa6e';
+            floatingIcon.style.color = '#c8aa6e';
+            floatingIcon.style.boxShadow = '0 0 15px rgba(200, 170, 110, 0.8)';
+            svg.style.transform = 'scale(1.1)';
+        } else {
+            floatingIcon.style.borderColor = '#555';
+            floatingIcon.style.color = '#888';
+            floatingIcon.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
+            svg.style.transform = 'scale(1)';
         }
     }
 
-    // ===== 4. 渲染函数 =====
-    function renderUI(keyword = '') {
-        const allList = document.getElementById('aug-all-list');
-        const priorityListEl = document.getElementById('aug-priority-list');
-        if (!allList || !priorityListEl) return;
+    function removeFloatingIcon() {
+        if (floatingIcon && floatingIcon.parentNode) {
+            floatingIcon.parentNode.removeChild(floatingIcon);
+            floatingIcon = null;
+        }
+        if (enemyBenchContainer && enemyBenchContainer.parentNode) {
+            enemyBenchContainer.parentNode.removeChild(enemyBenchContainer);
+            enemyBenchContainer = null;
+        }
+    }
 
-        if (allChampions.length === 0) {
-            priorityListEl.innerHTML = '<div style="color:#6B6B6B; font-size:12px;">正在加载英雄数据...</div>';
+    function clearInjected() {
+        for (const rec of injectedNodes) {
+            if (!rec.el) continue;
+            try {
+                if (rec.type === 'portrait') {
+                    rec.el.style.display = '';
+                    rec.el.style.backgroundImage = '';
+                } else if (rec.type === 'primaryText') {
+                    rec.el.classList.add('hidden');
+                    for (const n of Array.from(rec.el.childNodes)) {
+                        if (n.nodeType === Node.TEXT_NODE) n.textContent = '';
+                    }
+                    const glow = rec.el.querySelector('.summoner-primary-text-glow');
+                    if (glow) glow.textContent = '';
+                } else if (rec.type === 'summonerName') {
+                    rec.el.style.display = '';
+                }
+            } catch(e) {}
+        }
+        injectedNodes.clear();
+    }
+
+    function applyChampionToObject(obj, championId, isLocked) {
+        if (!obj || !championId) return;
+
+        const wrapper = obj.closest('.summoner-wrapper');
+        if (wrapper) {
+            wrapper.classList.remove('removed');
+            wrapper.classList.add('visible');
+        }
+        obj.classList.remove('removed');
+        obj.classList.add('visible');
+
+        const iconContainer = obj.querySelector('.champion-icon-container');
+        if (iconContainer) iconContainer.classList.remove('dim');
+
+        const portrait = obj.querySelector('.portrait-icon');
+        if (portrait) {
+            portrait.style.setProperty('display', 'block', 'important');
+            portrait.style.backgroundImage = `url('/lol-game-data/assets/v1/champion-icons/${championId}.png')`;
+            portrait.style.backgroundSize = 'cover';
+            portrait.style.backgroundPosition = 'center';
+            portrait.style.width = '100%';
+            portrait.style.height = '100%';
+            injectedNodes.add({ el: portrait, type: 'portrait' });
+        }
+
+        const primary = obj.querySelector('.summoner-primary-text');
+        if (primary) {
+            primary.classList.remove('hidden');
+            for (const n of Array.from(primary.childNodes)) {
+                if (n.nodeType === Node.TEXT_NODE) n.textContent = '';
+            }
+            const label = champName(championId) + (isLocked ? '' : '(预选)');
+            primary.insertBefore(document.createTextNode(label), primary.firstChild);
+            
+            const glow = primary.querySelector('.summoner-primary-text-glow');
+            if (glow) glow.textContent = champName(championId);
+            injectedNodes.add({ el: primary, type: 'primaryText' });
+        }
+
+        const summonerName = obj.querySelector('.summoner-name');
+        if (summonerName) {
+            summonerName.style.display = 'none';
+            injectedNodes.add({ el: summonerName, type: 'summonerName' });
+        }
+    }
+
+    function renderEnemyBench(benchIds) {
+        const myBench = document.querySelector('.champion-bench.ember-view');
+        if (!myBench) return;
+
+        if (!benchIds || benchIds.length === 0) {
+            if (enemyBenchContainer) enemyBenchContainer.style.display = 'none';
             return;
         }
 
-        priorityListEl.innerHTML = '';
-        priorityList.forEach((id, index) => {
-            const champ = allChampions.find(c => c.id === id);
-            if (!champ) return;
-            const item = document.createElement('div');
-            item.draggable = true;
-            item.dataset.index = index;
-            item.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 4px; position: relative; cursor: grab;`;
+        const uniqueBenchIds = [...new Set(benchIds)];
 
+        if (!enemyBenchContainer || !enemyBenchContainer.parentNode) {
+            enemyBenchContainer = myBench.cloneNode(true);
+            enemyBenchContainer.id = 'enemy-bench-display';
+            const label = enemyBenchContainer.querySelector('.bench-label');
+            if (label) {
+                label.innerHTML = '敌方可用';
+                label.style.color = '#E74C3C';
+                label.style.textShadow = '0 0 5px rgba(231, 76, 60, 0.5)';
+            }
+            const container = enemyBenchContainer.querySelector('.bench-container');
+            if (container) {
+                container.innerHTML = '';
+                container.style.display = 'flex';
+                container.style.flexDirection = 'row';
+                container.style.flexWrap = 'wrap';
+                container.style.justifyContent = 'flex-start';
+                container.style.gap = '5px';
+            }
+            
+            myBench.parentNode.insertBefore(enemyBenchContainer, myBench.nextSibling);
+            enemyBenchContainer.style.marginTop = '10px';
+        }
+
+        enemyBenchContainer.style.display = 'block';
+
+        const enemyContainer = enemyBenchContainer.querySelector('.bench-container');
+        if (!enemyContainer) return;
+
+        const currentSig = JSON.stringify(uniqueBenchIds);
+        if (enemyContainer.getAttribute('data-sig') === currentSig) return;
+        enemyContainer.setAttribute('data-sig', currentSig);
+
+        enemyContainer.innerHTML = '';
+
+        uniqueBenchIds.forEach(cid => {
+            const item = document.createElement('div');
+            item.className = 'champion-bench-item ember-view';
+            item.style.width = '48px';
+            item.style.height = '48px';
             item.innerHTML = `
-                <span style="font-size: 14px; color: #5A4A2A; width: 12px;">⋮⋮</span>
-                <span style="font-size: 10px; color: #C8AA6E; width: 15px;">${index + 1}</span>
-                <img src="${champ.icon}" style="width: 24px; height: 24px; border-radius: 50%;">
-                <span style="color: #A09B8C; font-size: 12px; flex: 1;">${champ.name}</span>
-                <div style="display: flex; gap: 5px; opacity: 0.7;">
-                    <span data-a="up" style="color: #C8AA6E; cursor: pointer; font-size: 12px;">↑</span>
-                    <span data-a="down" style="color: #C8AA6E; cursor: pointer; font-size: 12px;">↓</span>
-                    <span data-a="del" style="color: #E74C3C; cursor: pointer; font-size: 14px;">×</span>
+                <div class="bench-champion-icon" style="border: 2px solid #E74C3C; border-radius: 50%; box-sizing: border-box; background-color: #000; width: 48px; height: 48px;">
+                    <div style="background-image: url('/lol-game-data/assets/v1/champion-icons/${cid}.png'); width: 100%; height: 100%; background-size: cover; border-radius: 50%;"></div>
                 </div>
             `;
-
-            item.ondragstart = (e) => { dragSrcIndex = index; item.style.opacity = '0.4'; e.dataTransfer.effectAllowed = 'move'; };
-            item.ondragend = () => { dragSrcIndex = null; item.style.opacity = ''; };
-            item.ondragover = (e) => {
-                e.preventDefault();
-                item.style.borderTop = (e.clientY - item.getBoundingClientRect().top < item.offsetHeight / 2) ? '2px solid #C8AA6E' : '';
-                item.style.borderBottom = !(e.clientY - item.getBoundingClientRect().top < item.offsetHeight / 2) ? '2px solid #C8AA6E' : '';
-            };
-            item.ondragleave = () => { item.style.borderTop = ''; item.style.borderBottom = ''; };
-            item.ondrop = (e) => {
-                e.preventDefault();
-                if (dragSrcIndex === null || dragSrcIndex === index) return;
-                const before = (e.clientY - item.getBoundingClientRect().top) < item.offsetHeight / 2;
-                const [moved] = priorityList.splice(dragSrcIndex, 1);
-                let insertAt = (dragSrcIndex < index) ? (before ? index - 1 : index) : (before ? index : index + 1);
-                priorityList.splice(insertAt, 0, moved);
-                DataStore.set(KEY_PRIORITY, priorityList);
-                renderUI();
-            };
-
-            item.querySelectorAll('span[data-a]').forEach(btn => {
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    const a = btn.dataset.a;
-                    if (a === 'up' && index > 0) [priorityList[index - 1], priorityList[index]] = [priorityList[index], priorityList[index - 1]];
-                    else if (a === 'down' && index < priorityList.length - 1) [priorityList[index + 1], priorityList[index]] = [priorityList[index], priorityList[index + 1]];
-                    else if (a === 'del') priorityList.splice(index, 1);
-                    DataStore.set(KEY_PRIORITY, priorityList);
-                    renderUI();
-                };
-            });
-            priorityListEl.appendChild(item);
-        });
-
-        allList.innerHTML = '';
-        allChampions.forEach(champ => {
-            if (keyword && !champ.name.includes(keyword)) return;
-            if (priorityList.includes(champ.id)) return;
-            const item = document.createElement('div');
-            item.style.cssText = `display: flex; align-items: center; gap: 8px; padding: 4px; cursor: pointer;`;
-            item.innerHTML = `<img src="${champ.icon}" style="width: 24px; height: 24px; border-radius: 50%;"><span style="color: #A09B8C; font-size: 12px;">${champ.name}</span>`;
-            item.onclick = () => {
-                priorityList.push(champ.id);
-                DataStore.set(KEY_PRIORITY, priorityList);
-                renderUI();
-            };
-            allList.appendChild(item);
+            enemyContainer.appendChild(item);
         });
     }
 
-    // ===== 5. 核心引擎 =====
-    async function runEngine() {
-        if (!isEnabled) return;
+    function checkWukong(myTeam, enemyTeam, enemyBench) {
+        if (wukongAlertPlayed) return;
+
+        let hasWukong = false;
+
+        if (myTeam) {
+            for (const p of myTeam) {
+                if (p.championId === WUKONG_ID || p.championPickIntent === WUKONG_ID) {
+                    hasWukong = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasWukong && enemyTeam) {
+            for (const p of enemyTeam) {
+                if (p.championId === WUKONG_ID || p.championPickIntent === WUKONG_ID) {
+                    hasWukong = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasWukong && enemyBench) {
+            if (enemyBench.includes(WUKONG_ID)) {
+                hasWukong = true;
+            }
+        }
+
+        if (hasWukong) {
+            wukongAlertPlayed = true; 
+            console.log('[OpponentDisplay] 🐒 检测到齐天大圣！');
+            
+            const randomSound = WUKONG_SOUNDS[Math.floor(Math.random() * WUKONG_SOUNDS.length)];
+            console.log('[OpponentDisplay] 播放音效:', randomSound);
+            
+            try {
+                const audio = new Audio(randomSound);
+                audio.volume = 1.0;
+                audio.play().catch(e => console.warn('浏览器拦截了自动播放', e));
+            } catch (e) {
+                console.error('音效播放失败', e);
+            }
+
+            sendWukongAlert().catch(() => {});
+        }
+    }
+
+    // 把「本地选人 session 的 theirTeam」与「服务器远端快照」按 puuid / cellId 合并，
+    // 这样对手刚点选的意向（pickIntent）本机就能先看到，不必等对方上传。
+    function buildEnemySlots(opponent, session) {
+        const locals = (session && Array.isArray(session.theirTeam)) ? session.theirTeam : [];
+        const remote = (opponent && Array.isArray(opponent.enemyTeam)) ? opponent.enemyTeam : [];
+
+        const remoteByPuuid = Object.create(null);
+        const remoteByCell = Object.create(null);
+        const usedRemote = [];
+
+        for (const p of remote) {
+            if (!p) continue;
+            if (p.puuid) remoteByPuuid[p.puuid] = p;
+            if (p.cellId !== undefined && p.cellId !== null) remoteByCell[String(p.cellId)] = p;
+        }
+
+        const slots = [];
+        const total = Math.max(locals.length, 5);
+
+        for (let i = 0; i < total; i++) {
+            const l = locals[i] || null;
+            let r = null;
+            if (l) {
+                r = (l.puuid && remoteByPuuid[l.puuid]) ||
+                    (l.cellId !== undefined && l.cellId !== null && remoteByCell[String(l.cellId)]) || null;
+            }
+            if (r) usedRemote.push(r);
+
+            const entry = {
+                index: i,
+                puuid: (l && l.puuid) || (r && r.puuid) || null,
+                summonerId: (l && l.summonerId) || (r && r.summonerId) || 0,
+                cellId: (l && l.cellId !== undefined) ? l.cellId : ((r && r.cellId) || null),
+                championId: (l && l.championId) || (r && r.championId) || 0,
+                championPickIntent: (l && l.championPickIntent) || (r && r.championPickIntent) || 0
+            };
+            slots.push(entry);
+        }
+
+        // 远端有、本地 theirTeam 里没有的（例如本机还没拿到对方席位信息）：
+        // 优先按 cellId-5 落回原生席位，其次找空闲席位，实在没位置才追加到末尾。
+        // 关键：不能无脑 slots.length 追加，DOM 只有 5 个坑位，越界会被整批丢弃。
+        const occupied = Object.create(null);
+        for (let si = 0; si < slots.length; si++) {
+            if (slots[si].championId || slots[si].championPickIntent) occupied[si] = true;
+        }
+        let extra = 0;
+        for (const p of remote) {
+            if (!p) continue;
+            if (usedRemote.indexOf(p) >= 0) continue;
+            if (!p.championId && !p.championPickIntent) continue;
+            const entry = {
+                index: slots.length,
+                puuid: p.puuid || null,
+                summonerId: p.summonerId || 0,
+                cellId: p.cellId !== undefined ? p.cellId : null,
+                championId: p.championId || 0,
+                championPickIntent: p.championPickIntent || 0
+            };
+            let target = -1;
+            const span = Math.max(slots.length, 5);
+            if (p.cellId !== undefined && p.cellId !== null) {
+                const guess = Number(p.cellId) - 5;
+                if (guess >= 0 && guess < span && !occupied[guess]) target = guess;
+            }
+            if (target < 0) {
+                for (let si = 0; si < span; si++) {
+                    if (!occupied[si]) { target = si; break; }
+                }
+            }
+            if (target >= 0) {
+                entry.index = target;
+                slots[target] = entry;
+                occupied[target] = true;
+            } else {
+                slots.push(entry);
+            }
+            extra++;
+        }
+
+        return { slots: slots, extra: extra };
+    }
+
+    // 客户端重绘会把我们注入的节点换掉；签名没变时也必须补画一次
+    function injectedDetached() {
+        if (injectedNodes.size === 0) return true;
+        for (const rec of injectedNodes) {
+            if (!rec.el) return true;
+            if (rec.el.isConnected === false) return true;
+            if (!document.contains(rec.el)) return true;
+        }
+        return false;
+    }
+
+    function renderOpponent(opponent, session) {
+        const sessionMyTeam = (session && session.myTeam) || null;
+
+        checkWukong(sessionMyTeam, opponent ? opponent.enemyTeam : null, opponent ? opponent.enemyBench : null);
+
+        const built = buildEnemySlots(opponent, session);
+        const slots = built.slots;
+
+        // 只用本局真实数据：对面没上传或上传失败就当作没有对手，不保留旧画面、不做记忆
+        const resolved = [];
+        for (const e of slots) {
+            const cid = e.championId || e.championPickIntent || 0;
+            if (cid) resolved.push({ slot: e, cid: cid, locked: !!e.championId });
+        }
+
+        if (resolved.length > 0) {
+            const sig = JSON.stringify(resolved.map(function (x) {
+                return [x.slot.puuid || x.slot.cellId || x.slot.index, x.cid, x.locked];
+            }));
+
+            const needPaint = (sig !== lastOpponentSig) || injectedDetached();
+            if (needPaint) {
+                lastOpponentSig = sig;
+                clearInjected();
+
+                const enemyObjects = Array.from(document.querySelectorAll(".summoner-object.right"));
+                for (const item of resolved) {
+                    const idx = item.slot.index;
+                    if (idx >= enemyObjects.length) continue;
+                    applyChampionToObject(enemyObjects[idx], item.cid, item.locked);
+                }
+            }
+            updateIconStatus(true);
+        } else {
+            // 没有本局数据：把上一局残留的注入清掉，恢复原生空白
+            if (lastOpponentSig !== "" || injectedNodes.size > 0) {
+                lastOpponentSig = "";
+                clearInjected();
+            }
+            updateIconStatus(false);
+        }
+
+        let bench = [];
+        if (opponent && Array.isArray(opponent.enemyBench)) bench = opponent.enemyBench.slice();
+        if (session && Array.isArray(session.theirTeam)) {
+            for (const p of session.theirTeam) {
+                const cid = (p && p.championId) || 0;
+                if (cid && bench.indexOf(cid) < 0) bench.push(cid);
+            }
+        }
+        renderEnemyBench(bench);
+    }
+    function resetRoundState() {
+        lastOpponentSig = "";
+        wukongAlertPlayed = false;
+        lastWukongSentAt = 0;
+        roomConvId = null;
+        lastOpponent = null;
+        lastOpponentAt = 0;
+        lastUploadSig = "";
+        lastUploadAt = 0;
+        lastUploadFailAt = 0;
+        lastOppFetchAt = 0;
+    }
+    async function poll() {
+        // 单轮串行：上一轮没结束就直接跳过，避免网络慢时请求叠加
+        if (pollInFlight) {
+            if (Date.now() - pollStartedAt > POLL_STALL_MS) {
+                console.warn("[OpponentDisplay] 上一轮轮询卡住超过 " + POLL_STALL_MS + "ms，强制解锁");
+                pollInFlight = false;
+            } else {
+                return;
+            }
+        }
+        pollInFlight = true;
+        pollStartedAt = Date.now();
 
         try {
-            const res = await fetch('/lol-champ-select/v1/session');
-            if (!res.ok) return;
-            const session = await res.json();
-            if (!session.benchEnabled) return;
+            const phase = await lcuGet("/lol-gameflow/v1/gameflow-phase");
+            const prevPhase = lastPhase;
 
-            // 🚨 重开修复 1：用 session 身份特征检测新一局
-            const sessionKey = [
-                session.gameId,
-                session.chatDetails && session.chatDetails.gameId,
-                session.queueId,
-                session.localPlayerCellId,
-                (session.actions || []).map(a => a.id).join(','),
-                (session.myTeam || []).map(p => p.cellId).join(',')
-            ].join('|');
-
-            if (sessionKey !== lastSessionKey) {
-                lastSessionKey = sessionKey;
-                hasLockedInitial = false;
-                hasSwappedOnce = false;
-                swapTargetId = null;
-                isCustomGame = false;
-                fallbackPickId = null;
+            if (phase === "Lobby" || phase === "Matchmaking" || phase === "ChampSelect") {
+                await updatePartyId();
             }
 
-            const queueId = session.queueId;
-            const isKiwi = (session.gameMode === 'KIWI');
-            const knownCustomQueues = [0, 1700, 1710, 3100, 3130, 3270];
-            const queueReady = queueId !== undefined && queueId !== null;
-
-            isCustomGame = (queueReady && knownCustomQueues.includes(queueId))
-                || isKiwi
-                || session.isCustomGame === true;
-
-            if (customOnly && !isCustomGame) {
-                if (!queueReady && !isKiwi && session.isCustomGame === undefined) return;
-                return;
+            // 退出选人：清掉服务端本房间数据和本地状态，下一局不会带旧英雄
+            if (prevPhase === "ChampSelect" && phase !== "ChampSelect") {
+                clearServerData();
+                clearInjected();
+                if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
+                resetRoundState();
             }
 
-            const myCellId = session.localPlayerCellId;
-            const myPlayer = session.myTeam.find(p => p.cellId === myCellId);
-            if (!myPlayer) return;
-
-            let offered = [];
-            if (Array.isArray(session.benchChampions) && session.benchChampions.length > 0) {
-                offered = session.benchChampions.map(b => b.championId).filter(id => id && id > 0);
+            // 进入选人（新的一局）：清空本地状态，让本轮上传与拉取立刻发生
+            if (phase === "ChampSelect" && prevPhase !== "ChampSelect") {
+                resetRoundState();
             }
-            if (offered.length === 0) {
-                try {
-                    const subsetRes = await fetch('/lol-lobby-team-builder/champ-select/v1/subset-champion-list');
-                    if (subsetRes.ok) offered = await subsetRes.json();
-                } catch (e) {}
-            }
-            if (!offered || offered.length === 0) return;
+            lastPhase = phase;
 
-            const myActions = (session.actions || []).flat().filter(a => a.actorCellId === myCellId && a.type === 'pick' && !a.completed);
+            if (phase === "ChampSelect") {
+                if (!floatingIcon) createFloatingIcon();
+                const session = await lcuGet("/lol-champ-select/v1/session");
 
-            // 🚨 初始秒选阶段
-            if (!hasLockedInitial && myActions.length > 0) {
-                const action = myActions[0];
+                if (session && session.myTeam) {
+                    if (!myPuuid) await fetchMyPuuid();
+                    if (!champMapLoaded) await loadChampionMap();
+                    if (!partyId) partyId = sessionStorage.getItem("opp_display_party_id");
 
-                let bestId = null;
-                // 🚨 核心逻辑恢复：如果备选池里有大圣，直接秒选大圣
-                if (offered.includes(WUKONG_ID)) bestId = WUKONG_ID;
-                else {
-                    // 否则按优先级列表选
-                    for (const myTargetId of priorityList) {
-                        if (offered.includes(myTargetId)) { bestId = myTargetId; break; }
+                    // 上传：不 await，节流在 uploadMyTeam 内部
+                    if (partyId && myPuuid) uploadMyTeam(session);
+
+                    // 拉取：限流 700ms；拿不到就清空，绝不沿用旧数据
+                    const now = Date.now();
+                    if (partyId && myPuuid && now - lastOppFetchAt >= OPP_FETCH_MIN_MS) {
+                        lastOppFetchAt = now;
+                        const opp = await fetchOpponent();
+                        lastOpponent = opp || null;
+                        lastOpponentAt = opp ? now : 0;
                     }
-                }
 
-                if (bestId === null) {
-                    if (fallbackStrategy === 'none') return;
-                    else if (fallbackStrategy === 'random') {
-                        if (fallbackPickId === null || !offered.includes(fallbackPickId)) {
-                            fallbackPickId = offered[Math.floor(Math.random() * offered.length)];
-                        }
-                        bestId = fallbackPickId;
-                    } else if (fallbackStrategy === 'rightmost') {
-                        bestId = offered[offered.length - 1];
-                    }
+                    renderOpponent(lastOpponent, session);
                 }
+            } else {
+                if (injectedNodes.size > 0) clearInjected();
+                if (floatingIcon || enemyBenchContainer) removeFloatingIcon();
 
-                const lockRes = await fetch(`/lol-champ-select/v1/session/actions/${action.id}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ championId: bestId, completed: true })
+                if (phase === "InProgress" || phase === "EndOfGame" || phase === "None") {
+                    resetRoundState();
+                }
+            }
+        } catch (e) {
+            console.warn("[OpponentDisplay] 轮询异常", e);
+        } finally {
+            pollInFlight = false;
+        }
+    }
+    function start() {
+        console.log('[OpponentDisplay] 插件已启动 v15.2.0');
+        installCrossHooks();
+        window.__oppDisplay = {
+            version: '15.2.0',
+            startedAt: Date.now(),
+            getRoom: function () { return resolveRoomConv(); },
+            roomMessages: function () { return getRoomMessages(); },
+            sendTest: function (t) { return sendRoomMessage(t || '测试消息', 'manual'); },
+            wukongAlert: function () { return sendWukongAlert(); },
+            dedupCheck: function () { return hasRecentWukongMessage(); },
+            stats: function () {
+                return {
+                    version: '15.2.0',
+                    phase: lastPhase,
+                    partyId: partyId,
+                    roomConvId: roomConvId,
+                    pollInFlight: pollInFlight,
+                    uploadInFlight: uploadInFlight,
+                    lastUploadAt: lastUploadAt,
+                    lastOppFetchAt: lastOppFetchAt,
+                    lastOpponentAt: lastOpponentAt,
+                    enemyCount: (lastOpponent && lastOpponent.enemyTeam) ? lastOpponent.enemyTeam.length : 0,
+                    uploadFailCount: uploadFailCount,
+                    lastUploadFailAt: lastUploadFailAt,
+                    fetchFailCount: fetchFailCount,
+                    lastWukongSentAt: lastWukongSentAt
+                };
+            },
+            forcePoll: function () { return poll(); },
+            // 只读诊断：给定 session 与 opponent，返回槽位对齐结果（不修改 DOM）
+            debugSlots: function (session, opponent) {
+                const built = buildEnemySlots(opponent, session);
+                return built.slots.map(function (e) {
+                    const cid = e.championId || e.championPickIntent || 0;
+                    return {
+                        index: e.index,
+                        puuid: e.puuid,
+                        cellId: e.cellId,
+                        championId: e.championId,
+                        pickIntent: e.championPickIntent,
+                        resolved: cid,
+                        locked: !!e.championId
+                    };
                 });
-                if (lockRes.ok) hasLockedInitial = true;
-                return;
             }
-
-            if (hasSwappedOnce) return;
-            
-            // 🚨 如果当前已经是齐天大圣，绝对不切
-            if (myPlayer.championId === WUKONG_ID) return;
-
-            if (swapTargetId !== null) {
-                if (myPlayer.championId === swapTargetId) {
-                    hasSwappedOnce = true;
-                    swapTargetId = null;
-                    return;
-                }
-                if (!offered.includes(swapTargetId)) {
-                    swapTargetId = null;
-                } else {
-                    if (Date.now() - lastSwapAttemptTime > 800) {
-                        lastSwapAttemptTime = Date.now();
-                        await fetch(`/lol-champ-select/v1/session/bench/swap/${swapTargetId}`, { method: 'POST' });
-                    }
-                    return;
-                }
-            }
-
-            let bestTargetId = null;
-            // 🚨 换人阶段：完全按优先级列表换人，没有大圣特权
-            let currentPriorityIndex = priorityList.indexOf(myPlayer.championId);
-            if (currentPriorityIndex === -1) currentPriorityIndex = 999;
-            let bestTargetPriorityIndex = currentPriorityIndex;
-            for (const offeredId of offered) {
-                const pIndex = priorityList.indexOf(offeredId);
-                if (pIndex !== -1 && pIndex < bestTargetPriorityIndex) {
-                    bestTargetId = offeredId;
-                    bestTargetPriorityIndex = pIndex;
-                }
-            }
-
-            if (bestTargetId !== null) {
-                swapTargetId = bestTargetId;
-                lastSwapAttemptTime = Date.now();
-                await fetch(`/lol-champ-select/v1/session/bench/swap/${swapTargetId}`, { method: 'POST' });
-            }
-        } catch (e) {}
+        };
+        if (pollTimer) clearInterval(pollTimer);
+        // 🚨 使用 500ms 的高频轮询
+        pollTimer = setInterval(() => { poll().catch(() => {}); }, POLL_INTERVAL);
+        poll().catch(() => {});
     }
 
-    // ===== 启动 =====
-    const init = async () => {
-        loadAllChampions();
-
-        setInterval(async () => {
-            try {
-                const phaseRes = await fetch('/lol-gameflow/v1/gameflow-phase');
-                const phase = await phaseRes.json();
-
-                if (phase === 'ChampSelect') {
-                    if (!checkTimer) {
-                        checkTimer = setInterval(runEngine, 300);
-                    }
-                } else {
-                    if (checkTimer) {
-                        clearInterval(checkTimer);
-                        checkTimer = null;
-                    }
-                    hasLockedInitial = false;
-                    hasSwappedOnce = false;
-                    swapTargetId = null;
-                    isCustomGame = false;
-                    lastSessionKey = null;
-                    fallbackPickId = null;
-                }
-
-                if (phase === 'Lobby' || phase === 'Matchmaking') {
-                    injectUI();
-                } else {
-                    isPanelOpen = false;
-                    const panel = document.getElementById('augment-auto-pick-panel');
-                    if (panel) panel.style.display = 'none';
-                }
-            } catch (e) {}
-        }, 500);
-    };
-
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        setTimeout(init, 1000);
+        setTimeout(start, 1000);
     } else {
-        window.addEventListener('DOMContentLoaded', () => setTimeout(init, 1000));
+        window.addEventListener('DOMContentLoaded', () => setTimeout(start, 1000));
     }
 })();
